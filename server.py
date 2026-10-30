@@ -436,6 +436,11 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                         for p in r.get("presence", {}).values()
                         if now - p.get("time", 0) < 15
                     ]
+                    active_testers = [
+                        p.get("name", "Peer")
+                        for p in r.get("presence", {}).values()
+                        if p.get("teamTest", {}).get("active") and now - p.get("time", 0) < 15
+                    ]
                     res.append({
                         "id": r_id,
                         "name": r["name"],
@@ -443,6 +448,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                         "persistent": r.get("persistent", True),
                         "members": list(r.get("members", [])),
                         "activePeers": active_peers,
+                        "activeTesters": active_testers,
+                        "teamTestActive": len(active_testers) > 0,
                         "revision": r.get("revision", 1),
                         "objectsCount": len(r.get("objects", {})),
                         "lastSaved": r.get("last_saved", 0),
@@ -510,6 +517,12 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                     self.send_json(404, {"error": "Комната не найдена"})
                     return
                 r = rooms[room_id]
+                now = time.time()
+                active_testers = [
+                    p.get("name", "Peer")
+                    for p in r.get("presence", {}).values()
+                    if p.get("teamTest", {}).get("active") and now - p.get("time", 0) < 15
+                ]
                 self.send_json(200, {
                     "id": room_id,
                     "name": r["name"],
@@ -519,6 +532,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                     "revision": r.get("revision", 1),
                     "objectsCount": len(r.get("objects", {})),
                     "lastSaved": r.get("last_saved", 0),
+                    "activeTesters": active_testers,
+                    "teamTestActive": len(active_testers) > 0,
                 })
             return
 
@@ -730,6 +745,7 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                         "look": data.get("look", [0, 0, -1]),
                         "selected": data.get("selected", []),
                         "transforms": data.get("transforms", {}),
+                        "teamTest": data.get("teamTest", None),
                         "hue": (hash(token) % 100) / 100.0,
                         "time": time.time(),
                     }

@@ -34,6 +34,14 @@ A high-performance custom plugin and synchronization engine for **Roblox Studio*
   - **Saved Rooms Browser:** View all rooms stored on the server and rejoin/resume any project in 1 click without needing a new invitation.
   - **Backup Time Machine:** Browse up to 25 automatic & manual snapshots per room and restore your map to any checkpoint in 1 click (all connected peers sync to the restored backup automatically).
 
+### 5. Multiplayer Team Test (Co-op Playtest in Studio)
+- **Playtest Together Directly in Studio:** No need to publish to Roblox or wait for slow Team Test cloud servers. Simply click **"▶ Start Team Test"** in the plugin or the toolbar button to playtest your map with friends!
+- **Live 3D Avatars:** Automatically spawns real Roblox player avatars with your skin, hair, and overhead nametags.
+- **Full Kinematic Physics & Controls:** WASD movement, Space to jump, LeftShift to sprint, obstacle climbing (stairs), floor collision against all parts and terrain, gravity, and void respawn.
+- **60 FPS Peer Interpolation & Procedural Animation:** See your friends running, jumping, and falling in real time with smooth 60 FPS interpolation.
+- **In-Game Chat Bubbles & HUD:** Press `/` or click the chat bar to type messages that pop up as overhead speech bubbles for everyone in the session.
+- **Map Protection:** Test avatars reside in an un-archived folder (`PlaceTogetherTeamTest`), ensuring playtesting never interferes with or corrupts map synchronization.
+
 ---
 
 ## 📦 Getting Started

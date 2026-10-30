@@ -57,6 +57,7 @@ end
 
 local toolbar = plugin:CreateToolbar("PlaceTogether")
 local button = toolbar:CreateButton("PlaceTogether", "Collaborative Building v3.0", "")
+local teamTestToolbarBtn = toolbar:CreateButton("TeamTest", "Toggle Co-op Team Test", "")
 local widget = plugin:CreateDockWidgetPluginGuiAsync(
 	"PlaceTogetherInvites03",
 	DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Right, false, false, 360, 580, 300, 420)
@@ -363,6 +364,24 @@ participantsText.TextSize = 11
 local quickSaveBtn = makeButton("Save & Create Backup Now", sessionCard, "success", 34)
 local connect = makeButton("Leave Session", sessionCard, "danger", 34)
 connect.Visible = false
+
+-- CO-OP TEAM TEST UI CARD
+local teamTestCard = card(homePanel, "TeamTestCard")
+local ttBadge = textLabel("CO-OP TEAM TEST (PLAYTEST MODE)", 14, teamTestCard)
+ttBadge.Font = Enum.Font.GothamBold
+ttBadge.TextSize = 9
+ttBadge.TextColor3 = palette.green
+
+local ttTitle = title("Multiplayer Playtest in Studio", teamTestCard)
+local ttDesc = textLabel("Spawn avatars, run, jump, check parkour & collisions with friends directly in Roblox Studio without uploading to Roblox!", 28, teamTestCard)
+ttDesc.TextSize = 11
+ttDesc.TextColor3 = palette.muted
+
+local ttActiveUsersLabel = textLabel("No active testers in room.", 18, teamTestCard)
+ttActiveUsersLabel.TextSize = 11
+ttActiveUsersLabel.TextColor3 = palette.subtle
+
+local toggleTeamTestBtn = makeButton("▶ Start Team Test", teamTestCard, "primary", 36)
 
 local hostStartBtn = makeButton("Start Hosting Current Place", homePanel, "primary", 36)
 
@@ -1051,7 +1070,9 @@ local function properties(obj)
 end
 
 local function eligible(obj)
-	return obj ~= script and obj ~= workspace.CurrentCamera and not obj:IsA("Terrain")
+	if obj == script or obj == workspace.CurrentCamera or obj:IsA("Terrain") then return false end
+	if obj.Name == "PlaceTogetherTeamTest" or obj:IsDescendantOf(workspace:FindFirstChild("PlaceTogetherTeamTest")) then return false end
+	return true
 end
 
 local function capture(obj, key)
@@ -2523,6 +2544,737 @@ task.spawn(function()
 end)
 
 -- ============================================================
+-- ============================================================
+-- CO-OP TEAM TEST SUB-SYSTEM (60 FPS MULTIPLAYER PLAYTEST)
+-- ============================================================
+local teamTestActive = false
+local teamTestFolder = nil
+local localTesterChar = nil
+local localCharNickLabel = nil
+local localCharBubbleFrame = nil
+local localCharBubbleLabel = nil
+
+local localPos = Vector3.zero
+local localCharRot = CFrame.identity
+local localVertVel = 0
+local localGrounded = true
+local localState = "Idle"
+local localStepTimer = 0
+local localIdleTimer = 0
+local localWalkSpeed = 16
+
+local camYaw = 0
+local camPitch = 0.2
+local camDist = 12
+local origCamCF = nil
+local origCamType = nil
+local isRmbDown = false
+local isChatFocused = false
+
+local myChatBubbleText = ""
+local myChatBubbleTime = 0
+local myUserId = 0
+pcall(function() myUserId = game:GetService("StudioService"):GetUserId() end)
+
+local remoteTesters = {} -- peer.id -> { model, label, bubbleFrame, bubbleLabel, pos, targetPos, rot, targetRot, state, stepTimer, idleTimer, lastChat, seen }
+local activeTestersList = {}
+
+local hudGui = nil
+local hudActiveUsersLabel = nil
+local hudChatBox = nil
+
+local function getTeamTestFolder()
+	local folder = workspace:FindFirstChild("PlaceTogetherTeamTest")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "PlaceTogetherTeamTest"
+		folder.Archivable = false
+		folder.Parent = workspace
+	end
+	return folder
+end
+
+local function getSpawnLocation()
+	local spawns = {}
+	for _, desc in ipairs(workspace:GetDescendants()) do
+		if desc:IsA("SpawnLocation") and desc.Enabled then
+			table.insert(spawns, desc)
+		end
+	end
+	if #spawns > 0 then
+		local s = spawns[math.random(1, #spawns)]
+		return s.Position + Vector3.new(0, 3.5, 0)
+	end
+	local cam = workspace.CurrentCamera
+	if cam then
+		return cam.CFrame.Position + cam.CFrame.LookVector * 8 + Vector3.new(0, 2, 0)
+	end
+	return Vector3.new(0, 10, 0)
+end
+
+local function buildRobloxAvatar(name, uid, tint)
+	local char = nil
+	if uid and uid > 0 then
+		pcall(function()
+			char = game:GetService("Players"):CreateHumanoidModelFromUserId(uid)
+		end)
+	end
+	if not char then
+		char = Instance.new("Model")
+		char.Name = name
+
+		local root = Instance.new("Part")
+		root.Name = "HumanoidRootPart"
+		root.Size = Vector3.new(2, 2, 1)
+		root.Transparency = 1
+		root.CanCollide = false
+		root.Anchored = true
+		root.Parent = char
+		char.PrimaryPart = root
+
+		local torso = Instance.new("Part")
+		torso.Name = "Torso"
+		torso.Size = Vector3.new(2, 2, 1)
+		torso.Color = tint or Color3.fromRGB(59, 130, 246)
+		torso.Material = Enum.Material.SmoothPlastic
+		torso.CanCollide = false
+		torso.Anchored = true
+		torso.Parent = char
+
+		local head = Instance.new("Part")
+		head.Name = "Head"
+		head.Size = Vector3.new(1.25, 1.25, 1.25)
+		head.Shape = Enum.PartType.Ball
+		head.Color = Color3.fromRGB(245, 205, 48)
+		head.Material = Enum.Material.SmoothPlastic
+		head.CanCollide = false
+		head.Anchored = true
+		head.Parent = char
+
+		local face = Instance.new("Decal")
+		face.Name = "face"
+		face.Texture = "rbxasset://textures/face.png"
+		face.Face = Enum.NormalId.Front
+		face.Parent = head
+
+		local leftArm = Instance.new("Part")
+		leftArm.Name = "Left Arm"
+		leftArm.Size = Vector3.new(1, 2, 1)
+		leftArm.Color = Color3.fromRGB(245, 205, 48)
+		leftArm.Material = Enum.Material.SmoothPlastic
+		leftArm.CanCollide = false
+		leftArm.Anchored = true
+		leftArm.Parent = char
+
+		local rightArm = Instance.new("Part")
+		rightArm.Name = "Right Arm"
+		rightArm.Size = Vector3.new(1, 2, 1)
+		rightArm.Color = Color3.fromRGB(245, 205, 48)
+		rightArm.Material = Enum.Material.SmoothPlastic
+		rightArm.CanCollide = false
+		rightArm.Anchored = true
+		rightArm.Parent = char
+
+		local leftLeg = Instance.new("Part")
+		leftLeg.Name = "Left Leg"
+		leftLeg.Size = Vector3.new(1, 2, 1)
+		leftLeg.Color = Color3.fromRGB(33, 84, 185)
+		leftLeg.Material = Enum.Material.SmoothPlastic
+		leftLeg.CanCollide = false
+		leftLeg.Anchored = true
+		leftLeg.Parent = char
+
+		local rightLeg = Instance.new("Part")
+		rightLeg.Name = "Right Leg"
+		rightLeg.Size = Vector3.new(1, 2, 1)
+		rightLeg.Color = Color3.fromRGB(33, 84, 185)
+		rightLeg.Material = Enum.Material.SmoothPlastic
+		rightLeg.CanCollide = false
+		rightLeg.Anchored = true
+		rightLeg.Parent = char
+
+		local hum = Instance.new("Humanoid")
+		hum.MaxHealth = 100
+		hum.Health = 100
+		hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+		hum.Parent = char
+	end
+
+	for _, p in ipairs(char:GetDescendants()) do
+		if p:IsA("BasePart") then
+			p.CanCollide = false
+			p.Anchored = true
+			p.Archivable = false
+		end
+	end
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "Overhead"
+	bb.Size = UDim2.fromOffset(220, 60)
+	bb.StudsOffset = Vector3.new(0, 3.2, 0)
+	bb.AlwaysOnTop = true
+	bb.MaxDistance = 1500
+	bb.Parent = char.PrimaryPart or char:FindFirstChild("Head") or char
+
+	local nickL = Instance.new("TextLabel")
+	nickL.Name = "Nick"
+	nickL.Size = UDim2.new(1, 0, 0, 20)
+	nickL.Position = UDim2.fromOffset(0, 32)
+	nickL.BackgroundTransparency = 1
+	nickL.Font = Enum.Font.GothamBold
+	nickL.TextSize = 13
+	nickL.TextColor3 = tint or Color3.fromRGB(255, 255, 255)
+	nickL.TextStrokeColor3 = Color3.fromRGB(15, 17, 23)
+	nickL.TextStrokeTransparency = 0.2
+	nickL.Text = name
+	nickL.Parent = bb
+
+	local chatFrame = Instance.new("Frame")
+	chatFrame.Name = "ChatBubble"
+	chatFrame.Size = UDim2.new(1, 0, 0, 26)
+	chatFrame.Position = UDim2.fromOffset(0, 0)
+	chatFrame.BackgroundColor3 = Color3.fromRGB(25, 29, 39)
+	chatFrame.BorderSizePixel = 0
+	chatFrame.Visible = false
+	chatFrame.Parent = bb
+
+	local cCorn = Instance.new("UICorner")
+	cCorn.CornerRadius = UDim.new(0, 8)
+	cCorn.Parent = chatFrame
+	local cSt = Instance.new("UIStroke")
+	cSt.Color = Color3.fromRGB(59, 130, 246)
+	cSt.Thickness = 1
+	cSt.Parent = chatFrame
+
+	local chatL = Instance.new("TextLabel")
+	chatL.Name = "ChatText"
+	chatL.Size = UDim2.fromScale(1, 1)
+	chatL.BackgroundTransparency = 1
+	chatL.Font = Enum.Font.GothamMedium
+	chatL.TextSize = 12
+	chatL.TextColor3 = Color3.fromRGB(248, 250, 252)
+	chatL.Text = ""
+	chatL.Parent = chatFrame
+
+	return char, nickL, chatFrame, chatL
+end
+
+local function animateAvatar(char, state, stepTimer, idleTimer)
+	local root = char.PrimaryPart
+	if not root then return end
+	local rootCF = root.CFrame
+
+	local torso = char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+	local head = char:FindFirstChild("Head")
+	local leftArm = char:FindFirstChild("Left Arm") or char:FindFirstChild("LeftUpperArm")
+	local rightArm = char:FindFirstChild("Right Arm") or char:FindFirstChild("RightUpperArm")
+	local leftLeg = char:FindFirstChild("Left Leg") or char:FindFirstChild("LeftUpperLeg")
+	local rightLeg = char:FindFirstChild("Right Leg") or char:FindFirstChild("RightUpperLeg")
+
+	if torso and head and leftArm and rightArm and leftLeg and rightLeg then
+		if state == "Running" or state == "Walking" then
+			local amp = (state == "Running") and 0.85 or 0.6
+			local swing = math.sin(stepTimer) * amp
+			torso.CFrame = rootCF * CFrame.new(0, math.abs(math.sin(stepTimer * 2)) * 0.15, 0)
+			head.CFrame = torso.CFrame * CFrame.new(0, 1.5, 0)
+			leftLeg.CFrame = rootCF * CFrame.new(-0.5, -1, 0) * CFrame.Angles(swing, 0, 0) * CFrame.new(0, -1, 0)
+			rightLeg.CFrame = rootCF * CFrame.new(0.5, -1, 0) * CFrame.Angles(-swing, 0, 0) * CFrame.new(0, -1, 0)
+			leftArm.CFrame = torso.CFrame * CFrame.new(-1.5, 0.5, 0) * CFrame.Angles(-swing * 0.8, 0, 0) * CFrame.new(0, -1, 0)
+			rightArm.CFrame = torso.CFrame * CFrame.new(1.5, 0.5, 0) * CFrame.Angles(swing * 0.8, 0, 0) * CFrame.new(0, -1, 0)
+		elseif state == "Jumping" then
+			torso.CFrame = rootCF * CFrame.new(0, 0.2, 0)
+			head.CFrame = torso.CFrame * CFrame.new(0, 1.5, 0)
+			leftLeg.CFrame = rootCF * CFrame.new(-0.5, -0.7, 0.3) * CFrame.Angles(-0.5, 0, 0) * CFrame.new(0, -1, 0)
+			rightLeg.CFrame = rootCF * CFrame.new(0.5, -0.7, 0.3) * CFrame.Angles(-0.5, 0, 0) * CFrame.new(0, -1, 0)
+			leftArm.CFrame = torso.CFrame * CFrame.new(-1.5, 0.8, 0) * CFrame.Angles(2.8, 0, 0) * CFrame.new(0, -1, 0)
+			rightArm.CFrame = torso.CFrame * CFrame.new(1.5, 0.8, 0) * CFrame.Angles(2.8, 0, 0) * CFrame.new(0, -1, 0)
+		elseif state == "Freefall" then
+			torso.CFrame = rootCF
+			head.CFrame = torso.CFrame * CFrame.new(0, 1.5, 0)
+			leftLeg.CFrame = rootCF * CFrame.new(-0.5, -0.8, 0.2) * CFrame.Angles(-0.3, 0, 0) * CFrame.new(0, -1, 0)
+			rightLeg.CFrame = rootCF * CFrame.new(0.5, -0.8, 0.2) * CFrame.Angles(-0.3, 0, 0) * CFrame.new(0, -1, 0)
+			leftArm.CFrame = torso.CFrame * CFrame.new(-1.5, 0.5, 0) * CFrame.Angles(1.2, 0, 0.6) * CFrame.new(0, -1, 0)
+			rightArm.CFrame = torso.CFrame * CFrame.new(1.5, 0.5, 0) * CFrame.Angles(1.2, 0, -0.6) * CFrame.new(0, -1, 0)
+		else -- Idle
+			local breathe = math.sin(idleTimer * 2) * 0.05
+			torso.CFrame = rootCF * CFrame.new(0, breathe, 0)
+			head.CFrame = torso.CFrame * CFrame.new(0, 1.5, 0)
+			leftLeg.CFrame = rootCF * CFrame.new(-0.5, -1, 0) * CFrame.new(0, -1, 0)
+			rightLeg.CFrame = rootCF * CFrame.new(0.5, -1, 0) * CFrame.new(0, -1, 0)
+			leftArm.CFrame = torso.CFrame * CFrame.new(-1.5, 0.5, 0) * CFrame.Angles(breathe * 0.5, 0, 0.05) * CFrame.new(0, -1, 0)
+			rightArm.CFrame = torso.CFrame * CFrame.new(1.5, 0.5, 0) * CFrame.Angles(breathe * 0.5, 0, -0.05) * CFrame.new(0, -1, 0)
+		end
+	end
+end
+
+local function stopTeamTest()
+	if not teamTestActive then return end
+	teamTestActive = false
+
+	if localTesterChar then
+		localTesterChar:Destroy()
+		localTesterChar = nil
+	end
+	if hudGui then
+		hudGui:Destroy()
+		hudGui = nil
+		hudActiveUsersLabel = nil
+		hudChatBox = nil
+	end
+
+	for id, t in pairs(remoteTesters) do
+		if t.model then t.model:Destroy() end
+		remoteTesters[id] = nil
+	end
+
+	pcall(function()
+		workspace.CurrentCamera.CameraType = Enum.CameraType.Fixed
+		if origCamCF then
+			workspace.CurrentCamera.CFrame = origCamCF
+		end
+		task.wait(0.02)
+		workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+	end)
+
+	toggleTeamTestBtn.Text = "▶ Start Team Test"
+	toggleTeamTestBtn.TextColor3 = palette.ink
+	toggleTeamTestBtn.BackgroundColor3 = palette.accent
+	status("Team Test ended. Back in Studio edit mode.")
+end
+
+local function broadcastChatMessage(text)
+	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if #text == 0 then return end
+	myChatBubbleText = text
+	myChatBubbleTime = os.clock() + 6.0
+	if localCharBubbleFrame and localCharBubbleLabel then
+		localCharBubbleLabel.Text = text
+		localCharBubbleFrame.Visible = true
+	end
+end
+
+local function startTeamTest()
+	if not active then
+		status("Connect to a session first before starting Team Test.")
+		return
+	end
+	if teamTestActive then
+		stopTeamTest()
+		return
+	end
+
+	teamTestFolder = getTeamTestFolder()
+	origCamCF = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or nil
+	origCamType = workspace.CurrentCamera and workspace.CurrentCamera.CameraType or nil
+
+	local spawnPos = getSpawnLocation()
+	localPos = spawnPos
+	localVertVel = 0
+	localGrounded = true
+	localState = "Idle"
+	localStepTimer = 0
+	localIdleTimer = 0
+	camYaw = 0
+	camPitch = 0.2
+	camDist = 12
+
+	local uid = 0
+	pcall(function() uid = game:GetService("StudioService"):GetUserId() end)
+	local char, nickL, bFrame, bLabel = buildRobloxAvatar(selfNick.Text, uid, palette.green)
+	char.Parent = teamTestFolder
+	char:PivotTo(CFrame.new(spawnPos))
+	localTesterChar = char
+	localCharNickLabel = nickL
+	localCharBubbleFrame = bFrame
+	localCharBubbleLabel = bLabel
+
+	nickL.Text = selfNick.Text .. " (You)"
+	nickL.TextColor3 = palette.green
+
+	pcall(function()
+		workspace.CurrentCamera.CameraType = Enum.CameraType.Scriptable
+	end)
+
+	-- Create HUD
+	if hudGui then hudGui:Destroy() end
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "PlaceTogetherTeamTestHUD"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 9999
+	gui.Parent = game:GetService("CoreGui")
+
+	local topBar = Instance.new("Frame")
+	topBar.Size = UDim2.new(0, 520, 0, 40)
+	topBar.Position = UDim2.new(0.5, -260, 0, 16)
+	topBar.BackgroundColor3 = Color3.fromRGB(15, 17, 23)
+	topBar.BorderSizePixel = 0
+	topBar.Parent = gui
+	corner(topBar, 10)
+	stroke(topBar, Color3.fromRGB(36, 43, 58), 1)
+
+	local gDot = Instance.new("Frame")
+	gDot.Size = UDim2.fromOffset(8, 8)
+	gDot.Position = UDim2.fromOffset(14, 16)
+	gDot.BackgroundColor3 = palette.green
+	gDot.BorderSizePixel = 0
+	gDot.Parent = topBar
+	corner(gDot, 4)
+
+	local titleL = Instance.new("TextLabel")
+	titleL.Size = UDim2.new(0, 150, 1, 0)
+	titleL.Position = UDim2.fromOffset(28, 0)
+	titleL.BackgroundTransparency = 1
+	titleL.Font = Enum.Font.GothamBold
+	titleL.TextSize = 12
+	titleL.TextColor3 = palette.text
+	titleL.TextXAlignment = Enum.TextXAlignment.Left
+	titleL.Text = "TEAM TEST (CO-OP)"
+	titleL.Parent = topBar
+
+	local actL = Instance.new("TextLabel")
+	actL.Name = "ActiveUsers"
+	actL.Size = UDim2.new(0, 150, 1, 0)
+	actL.Position = UDim2.fromOffset(165, 0)
+	actL.BackgroundTransparency = 1
+	actL.Font = Enum.Font.GothamMedium
+	actL.TextSize = 11
+	actL.TextColor3 = palette.muted
+	actL.TextXAlignment = Enum.TextXAlignment.Left
+	actL.Text = "👥 You"
+	actL.Parent = topBar
+	hudActiveUsersLabel = actL
+
+	local respawnBtn = Instance.new("TextButton")
+	respawnBtn.Size = UDim2.fromOffset(76, 26)
+	respawnBtn.Position = UDim2.new(1, -165, 0.5, -13)
+	respawnBtn.BackgroundColor3 = Color3.fromRGB(28, 33, 45)
+	respawnBtn.BorderSizePixel = 0
+	respawnBtn.Font = Enum.Font.GothamBold
+	respawnBtn.TextSize = 11
+	respawnBtn.TextColor3 = palette.text
+	respawnBtn.Text = "Respawn"
+	respawnBtn.Parent = topBar
+	corner(respawnBtn, 6)
+	respawnBtn.MouseButton1Click:Connect(function()
+		localPos = getSpawnLocation()
+		localVertVel = 0
+		localGrounded = true
+		if localTesterChar then localTesterChar:PivotTo(CFrame.new(localPos)) end
+		status("Respawned at spawn location.")
+	end)
+
+	local exitBtn = Instance.new("TextButton")
+	exitBtn.Size = UDim2.fromOffset(76, 26)
+	exitBtn.Position = UDim2.new(1, -84, 0.5, -13)
+	exitBtn.BackgroundColor3 = palette.dangerBg
+	exitBtn.BorderSizePixel = 0
+	exitBtn.Font = Enum.Font.GothamBold
+	exitBtn.TextSize = 11
+	exitBtn.TextColor3 = Color3.fromRGB(252, 165, 165)
+	exitBtn.Text = "Exit Test"
+	exitBtn.Parent = topBar
+	corner(exitBtn, 6)
+	stroke(exitBtn, palette.dangerBorder, 1)
+	exitBtn.MouseButton1Click:Connect(stopTeamTest)
+
+	local hintL = Instance.new("TextLabel")
+	hintL.Size = UDim2.new(0, 560, 0, 22)
+	hintL.Position = UDim2.new(0.5, -280, 1, -38)
+	hintL.BackgroundColor3 = Color3.fromRGB(15, 17, 23)
+	hintL.BackgroundTransparency = 0.2
+	hintL.Font = Enum.Font.GothamMedium
+	hintL.TextSize = 11
+	hintL.TextColor3 = palette.muted
+	hintL.Text = "[WASD] Move   ·   [Space] Jump   ·   [Shift] Sprint   ·   [Hold RMB] Look   ·   [/] Chat"
+	hintL.Parent = gui
+	corner(hintL, 6)
+
+	local chatBar = Instance.new("Frame")
+	chatBar.Size = UDim2.new(0, 320, 0, 36)
+	chatBar.Position = UDim2.new(0, 16, 1, -52)
+	chatBar.BackgroundColor3 = Color3.fromRGB(18, 21, 29)
+	chatBar.BorderSizePixel = 0
+	chatBar.Parent = gui
+	corner(chatBar, 8)
+	stroke(chatBar, palette.fieldBorder, 1)
+
+	local chatBox = Instance.new("TextBox")
+	chatBox.Size = UDim2.new(1, -52, 1, 0)
+	chatBox.Position = UDim2.fromOffset(10, 0)
+	chatBox.BackgroundTransparency = 1
+	chatBox.Font = Enum.Font.GothamMedium
+	chatBox.TextSize = 12
+	chatBox.TextColor3 = palette.text
+	chatBox.PlaceholderText = "Type message (press /)..."
+	chatBox.PlaceholderColor3 = palette.subtle
+	chatBox.TextXAlignment = Enum.TextXAlignment.Left
+	chatBox.ClearTextOnFocus = false
+	chatBox.Parent = chatBar
+	hudChatBox = chatBox
+
+	local sendBtn = Instance.new("TextButton")
+	sendBtn.Size = UDim2.fromOffset(40, 26)
+	sendBtn.Position = UDim2.new(1, -44, 0.5, -13)
+	sendBtn.BackgroundColor3 = palette.accent
+	sendBtn.BorderSizePixel = 0
+	sendBtn.Font = Enum.Font.GothamBold
+	sendBtn.TextSize = 11
+	sendBtn.TextColor3 = palette.ink
+	sendBtn.Text = "Send"
+	sendBtn.Parent = chatBar
+	corner(sendBtn, 6)
+
+	local function doSend()
+		local txt = chatBox.Text
+		if #txt:gsub("%s+", "") > 0 then
+			broadcastChatMessage(txt)
+			chatBox.Text = ""
+			isChatFocused = false
+		end
+	end
+
+	sendBtn.MouseButton1Click:Connect(doSend)
+	chatBox.FocusLost:Connect(function(enterPressed)
+		isChatFocused = false
+		if enterPressed then doSend() end
+	end)
+	chatBox.Focused:Connect(function()
+		isChatFocused = true
+	end)
+
+	hudGui = gui
+	teamTestActive = true
+
+	toggleTeamTestBtn.Text = "⏹ Exit Team Test"
+	toggleTeamTestBtn.TextColor3 = Color3.fromRGB(252, 165, 165)
+	toggleTeamTestBtn.BackgroundColor3 = palette.dangerBg
+	status("Team Test active! Run, jump and test your game with peers.")
+end
+
+local function toggleTeamTest()
+	if teamTestActive then
+		stopTeamTest()
+	else
+		startTeamTest()
+	end
+end
+
+toggleTeamTestBtn.MouseButton1Click:Connect(toggleTeamTest)
+teamTestToolbarBtn.Click:Connect(toggleTeamTest)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if not teamTestActive then return end
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		isRmbDown = true
+	end
+	if not isChatFocused and input.KeyCode == Enum.KeyCode.Slash then
+		if hudChatBox then
+			task.defer(function() hudChatBox:CaptureFocus() end)
+		end
+	end
+	if input.KeyCode == Enum.KeyCode.Escape then
+		stopTeamTest()
+	end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		isRmbDown = false
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if not teamTestActive then return end
+	if isRmbDown and input.UserInputType == Enum.UserInputType.MouseMovement then
+		camYaw = camYaw - input.Delta.X * 0.005
+		camPitch = math.clamp(camPitch - input.Delta.Y * 0.005, -1.2, 1.2)
+	end
+	if input.UserInputType == Enum.UserInputType.MouseWheel then
+		camDist = math.clamp(camDist - input.Position.Z * 1.5, 4, 32)
+	end
+end)
+
+local function updateLocalTester(dt)
+	if not teamTestActive or not localTesterChar or not localTesterChar.PrimaryPart then return end
+
+	local isW = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up))
+	local isS = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down))
+	local isA = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left))
+	local isD = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right))
+	local isSpace = (not isChatFocused) and UserInputService:IsKeyDown(Enum.KeyCode.Space)
+	local isShift = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift))
+
+	local forward = Vector3.new(math.sin(camYaw), 0, -math.cos(camYaw))
+	local right = Vector3.new(math.cos(camYaw), 0, math.sin(camYaw))
+	local moveDir = Vector3.zero
+	if isW then moveDir = moveDir + forward end
+	if isS then moveDir = moveDir - forward end
+	if isD then moveDir = moveDir + right end
+	if isA then moveDir = moveDir - right end
+
+	local isMoving = moveDir.Magnitude > 0.05
+	if isMoving then moveDir = moveDir.Unit end
+
+	localWalkSpeed = isShift and 26 or 16
+	local deltaMove = moveDir * (localWalkSpeed * dt)
+
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = {getTeamTestFolder(), workspace.CurrentCamera}
+
+	-- Wall collision & step-up
+	if isMoving and deltaMove.Magnitude > 0.001 then
+		local wallCheck = workspace:Raycast(localPos + Vector3.new(0, 0.5, 0), deltaMove.Unit * (deltaMove.Magnitude + 1.2), rayParams)
+		if wallCheck then
+			local stepCheck = workspace:Raycast(localPos + Vector3.new(0, 1.4, 0), deltaMove.Unit * (deltaMove.Magnitude + 1.2), rayParams)
+			if not stepCheck then
+				localPos = localPos + Vector3.new(0, 1.2, 0)
+			else
+				local n = wallCheck.Normal
+				deltaMove = deltaMove - n * deltaMove:Dot(n)
+			end
+		end
+	end
+
+	localPos = localPos + deltaMove
+
+	-- Floor & gravity check
+	local floorRay = workspace:Raycast(localPos + Vector3.new(0, 1.2, 0), Vector3.new(0, -4.5, 0), rayParams)
+	if floorRay then
+		local floorY = floorRay.Position.Y + 2.7
+		if localPos.Y <= floorY + 0.35 and localVertVel <= 0 then
+			localPos = Vector3.new(localPos.X, floorY, localPos.Z)
+			localVertVel = 0
+			localGrounded = true
+		else
+			localVertVel = localVertVel - 90 * dt
+			localPos = localPos + Vector3.new(0, localVertVel * dt, 0)
+			localGrounded = false
+		end
+	else
+		localVertVel = localVertVel - 90 * dt
+		localPos = localPos + Vector3.new(0, localVertVel * dt, 0)
+		localGrounded = false
+	end
+
+	-- Jump
+	if isSpace and localGrounded then
+		localVertVel = 38
+		localGrounded = false
+	end
+
+	-- Void respawn
+	if localPos.Y < -250 then
+		localPos = getSpawnLocation()
+		localVertVel = 0
+		localGrounded = true
+		status("Fell into the void. Respawned!")
+	end
+
+	-- Rotation
+	if isMoving then
+		local targetLook = Vector3.new(deltaMove.X, 0, deltaMove.Z).Unit
+		localCharRot = localCharRot:Lerp(CFrame.lookAt(Vector3.zero, targetLook), 0.25)
+	end
+
+	local rootCF = CFrame.new(localPos) * (localCharRot - localCharRot.Position)
+	localTesterChar:PivotTo(rootCF)
+
+	-- State
+	if not localGrounded then
+		localState = (localVertVel > 0) and "Jumping" or "Freefall"
+	elseif isMoving then
+		localState = isShift and "Running" or "Walking"
+		localStepTimer = localStepTimer + dt * (localWalkSpeed * 0.7)
+	else
+		localState = "Idle"
+		localIdleTimer = localIdleTimer + dt
+	end
+
+	animateAvatar(localTesterChar, localState, localStepTimer, localIdleTimer)
+
+	-- Chat bubble expiration
+	if localCharBubbleFrame then
+		localCharBubbleFrame.Visible = (os.clock() < myChatBubbleTime)
+	end
+
+	-- Camera
+	local camFocus = localPos + Vector3.new(0, 1.8, 0)
+	local camRot = CFrame.Angles(0, camYaw, 0) * CFrame.Angles(camPitch, 0, 0)
+	local desiredCamPos = camFocus - (camRot.LookVector * camDist)
+	local occ = workspace:Raycast(camFocus, desiredCamPos - camFocus, rayParams)
+	if occ then
+		desiredCamPos = occ.Position + occ.Normal * 0.4
+	end
+	workspace.CurrentCamera.CFrame = CFrame.lookAt(desiredCamPos, camFocus)
+end
+
+local function updateRemoteTester(peer, dt)
+	local tt = peer.teamTest
+	if not tt or not tt.active or not tt.pos then
+		if remoteTesters[peer.id] then
+			if remoteTesters[peer.id].model then remoteTesters[peer.id].model:Destroy() end
+			remoteTesters[peer.id] = nil
+		end
+		return
+	end
+
+	local item = remoteTesters[peer.id]
+	if not item then
+		local folder = getTeamTestFolder()
+		local tint = Color3.fromHSV(peer.hue or 0.6, 0.7, 1)
+		local char, nickL, bFrame, bLabel = buildRobloxAvatar(peer.name, tt.userId or 0, tint)
+		char.Parent = folder
+		item = {
+			model = char,
+			label = nickL,
+			bubbleFrame = bFrame,
+			bubbleLabel = bLabel,
+			pos = Vector3.new(table.unpack(tt.pos)),
+			targetPos = Vector3.new(table.unpack(tt.pos)),
+			rot = CFrame.lookAt(Vector3.zero, Vector3.new(table.unpack(tt.look or {0, 0, -1}))),
+			targetRot = CFrame.lookAt(Vector3.zero, Vector3.new(table.unpack(tt.look or {0, 0, -1}))),
+			state = tt.state or "Idle",
+			stepTimer = 0,
+			idleTimer = 0,
+			lastChat = "",
+			seen = os.clock(),
+		}
+		remoteTesters[peer.id] = item
+	end
+
+	item.seen = os.clock()
+	item.targetPos = Vector3.new(table.unpack(tt.pos))
+	if tt.look and #tt.look == 3 then
+		local l = Vector3.new(table.unpack(tt.look))
+		if l.Magnitude > 0.01 then
+			item.targetRot = CFrame.lookAt(Vector3.zero, l)
+		end
+	end
+	item.state = tt.state or "Idle"
+
+	local blend = 1 - math.exp(-22 * math.min(dt, 0.1))
+	item.pos = item.pos:Lerp(item.targetPos, blend)
+	item.rot = item.rot:Lerp(item.targetRot, blend)
+
+	item.model:PivotTo(CFrame.new(item.pos) * (item.rot - item.rot.Position))
+
+	if item.state == "Running" or item.state == "Walking" then
+		item.stepTimer = item.stepTimer + dt * 14
+	else
+		item.idleTimer = item.idleTimer + dt
+	end
+
+	animateAvatar(item.model, item.state, item.stepTimer, item.idleTimer)
+
+	if tt.chat and tt.chat ~= "" and tt.chatTime and (os.clock() < tt.chatTime) then
+		item.bubbleLabel.Text = tt.chat
+		item.bubbleFrame.Visible = true
+	else
+		item.bubbleFrame.Visible = false
+	end
+end
+
 -- 60 FPS RENDERSTEPPED INTERPOLATION & PEER PRESENCE / LIVE DRAG
 -- ============================================================
 do
@@ -2657,6 +3409,43 @@ do
 			end
 		end
 		participantsText.Text = #names > 0 and ("Peers online ("..#names.."): "..table.concat(names, ", ")) or "No other participants in room yet."
+
+		-- Update Active Team Testers
+		local testers = {}
+		for _, peer in ipairs(peers) do
+			if peer.teamTest and peer.teamTest.active then
+				table.insert(testers, peer.name)
+				updateRemoteTester(peer, 0.016)
+			else
+				if remoteTesters[peer.id] then
+					if remoteTesters[peer.id].model then remoteTesters[peer.id].model:Destroy() end
+					remoteTesters[peer.id] = nil
+				end
+			end
+		end
+		activeTestersList = testers
+		local allTesters = {}
+		if teamTestActive then table.insert(allTesters, selfNick.Text .. " (You)") end
+		for _, tName in ipairs(testers) do table.insert(allTesters, tName) end
+
+		ttActiveUsersLabel.Text = #allTesters > 0 and ("👥 Active testers: " .. table.concat(allTesters, ", ")) or "No active testers in room."
+		if hudActiveUsersLabel then
+			hudActiveUsersLabel.Text = "👥 " .. table.concat(allTesters, ", ")
+		end
+
+		if teamTestActive then
+			toggleTeamTestBtn.Text = "⏹ Exit Team Test"
+			toggleTeamTestBtn.TextColor3 = Color3.fromRGB(252, 165, 165)
+			toggleTeamTestBtn.BackgroundColor3 = palette.dangerBg
+		elseif #testers > 0 then
+			toggleTeamTestBtn.Text = "▶ Join Team Test (" .. testers[1] .. " is testing!)"
+			toggleTeamTestBtn.TextColor3 = Color3.fromRGB(187, 247, 208)
+			toggleTeamTestBtn.BackgroundColor3 = palette.greenBg
+		else
+			toggleTeamTestBtn.Text = "▶ Start Team Test"
+			toggleTeamTestBtn.TextColor3 = palette.ink
+			toggleTeamTestBtn.BackgroundColor3 = palette.accent
+		end
 	end
 
 	local function cameraState()
@@ -2683,11 +3472,29 @@ do
 				if #selected >= 32 then break end
 			end
 		end
+		local teamTestData = nil
+		if teamTestActive and localTesterChar and localTesterChar.PrimaryPart then
+			local p = localTesterChar.PrimaryPart.Position
+			local lv = localTesterChar.PrimaryPart.CFrame.LookVector
+			teamTestData = {
+				active = true,
+				pos = {p.X, p.Y, p.Z},
+				look = {lv.X, lv.Y, lv.Z},
+				state = localState,
+				chat = myChatBubbleText,
+				chatTime = myChatBubbleTime,
+				userId = myUserId or 0,
+			}
+		else
+			teamTestData = { active = false }
+		end
+
 		return {
 			position = {position.X, position.Y, position.Z},
 			look = {look.X, look.Y, look.Z},
 			selected = selected,
 			transforms = transforms,
+			teamTest = teamTestData,
 		}
 	end
 
@@ -2703,7 +3510,12 @@ do
 		if not active or Run:IsRunning() then
 			if folder then clear() end
 			smoothTargets = {}
+			if teamTestActive then stopTeamTest() end
 			return
+		end
+
+		if teamTestActive then
+			updateLocalTester(dt)
 		end
 
 		-- 1. 60 FPS Smooth Object Transform Interpolation
