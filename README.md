@@ -1,141 +1,55 @@
-# Place Together
+# Place Together 3.0 (Ultra-Fast Fork)
 
-A custom plugin for Roblox Studio to enable collaborative game development (similar to Team Create) via local network connections.
-
-## Getting Started
-
-### 1. Download Place Together
-
-Download the latest release from the [Releases](https://github.com/Gre4ka43/Place-Together/releases) page.
-
-You will need:
-
-- **Place Together plugin** (`.rbxmx` file) - to install it in Roblox Studio.
-- **Server launcher** - the `.bat` file used to start the Place Together server.
+A high-performance custom plugin and synchronization engine for **Roblox Studio** that enables real-time collaborative game development (like Team Create) over local networks, VPNs (Radmin VPN, Hamachi, ZeroTier), or tunnels (ngrok, Porthole).
 
 ---
 
-### 2. Install the Plugin
+## 🚀 What's New in 3.0 (Fork Improvements)
 
-The easiest way to install everything is to open **Roblox Studio**, go to the **Plugins** tab, and click **Plugin Folder**. 
-Extract both the `.rbxmx` plugin file and the server `.bat` files into this folder to keep everything in one place.
+### 1. Massive Performance Optimization (Event-Driven Engine)
+- **O(1) Incremental Dirty Tracking:** Instead of scanning every property of every object across all 13 DataModel services on every tick (which caused severe frame drops on large maps), the plugin now uses event-driven `.Changed`, `.AttributeChanged`, `.DescendantAdded`, `.DescendantRemoving`, and `ScriptEditorService.TextDocumentDidChange` hooks combined with a lightweight rolling verifier.
+- **Zero-Closure Property Reflection:** Eliminated thousands of per-tick anonymous closure allocations during property capture.
+- **Single-Pass Apply:** Eliminated redundant full-place snapshots before and after applying remote deltas.
+- **Fixed Critical Terrain Voxel Lag Bug:** Fixed the bug where empty air chunks around the camera were re-scanned (`ReadVoxelChannels` on 512,000 voxels) every 0.5 seconds forever.
+- **Silent Fast Polling Server:** Suppressed synchronous Windows console I/O logging on high-frequency `/sync` and `/presence` requests.
 
-After installation, restart Roblox Studio if the plugin does not appear immediately on your toolbar.
+### 2. Buttery-Smooth 60 FPS Sync & Live Dragging
+- **6.6 Hz High-Frequency Sync & Presence (`0.15s`):** 3.3x faster tick rate with tiny delta packets.
+- **60 FPS CFrame Interpolation (`RenderStepped`):** Remote `BasePart` and `Model` movements/rotations smoothly interpolate (`Lerp`) at 60 FPS instead of teleporting choppily.
+- **Live Drag Transform Streaming:** When a peer selects and drags objects in Studio, live transform coordinates stream directly inside `/presence` packets for instant real-time visual feedback.
+- **Local Drag Protection:** Actively dragged local objects are protected from remote echo jitter while the mouse button is held.
+- **Frame-Budgeted Bulk Loading:** Joining large maps yields smoothly across frames so Roblox Studio never freezes.
 
-> **⚠️ IMPORTANT:** Upon first use, Roblox Studio may ask for permission to allow **HTTP Requests** and **Script Injection** for Place Together. You **MUST** click 'Allow', otherwise the plugin will not function and cannot sync your project.
+### 3. Bug Fixes
+- **Lossless Revision & Tombstone Engine:** Object versions are now unified with room revisions, and deleted objects are tracked via server tombstones (`r["tombstones"]`). Deletions and deltas are never lost—even across >200 revisions or server restarts.
+- **Fixed `Ctrl+D` / Copy-Paste ID Collisions:** Duplicating Parts or Models in Studio now immediately detects `PT_ObjectId` collisions and assigns fresh GUIDs to duplicated hierarchies.
+- **Full Toolbox Model Editing:** Removed the `isToolboxDescendant` restriction that previously prevented syncing edits, script changes, recolors, or deletions inside models inserted from the Toolbox.
+- **Depth-Sorted Hierarchy Creation:** Deeply nested folders and models are sorted top-down by parent chain depth before parenting so children never fail with `"Parent unavailable"`.
 
----
-
-### 3. Connect Everyone to the Same Network
-
-Place Together currently requires all participants to be able to connect to the host's computer.
-
-The easiest way is to use a virtual LAN/networking application. You can use any of these:
-
-- [Radmin VPN](https://www.radmin-vpn.com/) — creates a virtual local network between participants.
-- [Hamachi](https://vpn.net/) — another popular virtual LAN solution.
-- [Porthole - Local Port Sharing](https://store.steampowered.com/app/4963920/Porthole_Local_Port_Sharing/) — a newer alternative that can make local services accessible to your friends without port forwarding.
-
-**Everyone who wants to participate should join the same virtual network/lobby.**
-
----
-
-### 4. Check Windows Firewall
-
-Windows Firewall may prevent other players from connecting to the Place Together server.
-
-If you cannot connect, check your Windows Firewall settings and allow the server through the firewall.
-
-For testing, you can temporarily disable Windows Firewall, but **this is not recommended for normal use**. It is safer to create a firewall rule allowing the required server application/port.
-
-Make sure you only do this on a network and with people you trust. *(Don't forget to turn the firewall back on after you finish working!)*
+### 4. Reliable Saving, Room Browser & Backup Time Machine
+- **Smart Debounced Auto-Save:** The server automatically flushes changes to `data.json` within 2 seconds of any edit using atomic `.tmp` replacement and `.bak` corruption recovery.
+- **Graceful Shutdown Hooks:** Closing the server console (`Ctrl+C` or closing the window) automatically flushes unsaved state to disk.
+- **New `Saves & Rooms` Tab in Plugin:**
+  - **Save & Create Backup Now:** Instant manual save + timestamped snapshot creation in `backups/`.
+  - **Saved Rooms Browser:** View all rooms stored on the server and rejoin/resume any project in 1 click without needing a new invitation.
+  - **Backup Time Machine:** Browse up to 25 automatic & manual snapshots per room and restore your map to any checkpoint in 1 click (all connected peers sync to the restored backup automatically).
 
 ---
 
-### 5. Start the Server
+## 📦 Getting Started
 
-The person hosting the session should run the provided `.bat` file.
+### 1. Install the Plugin
+1. Open **Roblox Studio**, go to the **Plugins** tab, and click **Plugins Folder**.
+2. Copy [`PlaceTogether.rbxmx`](PlaceTogether.rbxmx) into the Plugins folder (or copy all files into one folder).
+3. Restart Roblox Studio if the plugin does not appear immediately on the toolbar.
+4. Allow **HTTP Requests** and **Script Injection** when prompted by Roblox Studio.
 
-A console window will open and start the Place Together server.
+### 2. Start the Server
+Run [`StartPlaceTogetherServer.bat`](StartPlaceTogetherServer.bat).
+- It will automatically use Python + [`server.py`](server.py) if Python is installed, or fall back to [`PlaceTogetherServer.exe`](PlaceTogetherServer.exe).
+- Copy the displayed IP address (`[Radmin VPN]`, `[Hamachi]`, `[ZeroTier]`, `[LAN]`, or `[Localhost]`) and paste it into the **Settings** tab of the PlaceTogether plugin.
 
-After the server starts, **the console will explicitly display an IP address**.
-
-Copy this IP address from the console and send it to the people who want to connect.
-
-> **Important:** The IP displayed by the server console is the exact address that both the host and other participants need to enter in the Place Together plugin settings.
-
----
-
-### 6. Connect to the Server
-
-The player who wants to join should:
-
-1. Open Roblox Studio.
-2. **Open an empty Baseplate.** 
-   > **⚠️ WARNING:** When joining someone else's session, *always* open an empty Baseplate. Do not open your existing local places, as their contents will be overwritten and mixed with the host's map.
-3. Open the **Place Together** plugin.
-4. Open the plugin settings.
-5. Enter the **IP address displayed in the host's server console**.
-6. Connect to the server.
-
-Make sure the player is connected to the same virtual network as the host.
-
----
-
-### 7. Invite Each Other
-
-Once connected to the server, use the Place Together plugin (as the Host) to **invite other players by their Roblox username**.
-
-Players can then accept and join the collaborative session through the invitation.
-
----
-
-### 8. Connection Problems
-
-If the connection does not work, check the following:
-
-- Everyone is connected to the same virtual network.
-- The host is running the `.bat` server.
-- The IP address entered in the plugin is exactly the IP displayed by the server console.
-- Windows Firewall is not blocking the server.
-- Everyone is using the same version of Place Together.
-
-#### Try switching the host
-
-Sometimes a connection may not work correctly **from the host to another player** due to NAT types or ISP restrictions.
-
-If this happens, try having the other player **host the server instead** and invite the original host.
-
-For example:
-
-**Host A → Player B doesn't work**
-
-Try:
-
-**Host B → Player A**
-
-The connection may work perfectly in the opposite direction depending on your specific network configuration.
-
----
-
-## ⚠️ Early Development & Limitations ⚠️
-
-Place Together is still in early development. 
-
-**Currently Supported:** 
-- Parts creation, movement, and editing
-- Terrain generation and editing
-- GUI synchronization
-- Script synchronization
-- Toolbox assets loading
-
-**Current Limitations & Known Issues:**
-- Team Test is currently **not** supported.
-- **Simultaneous Script Editing:** If two people edit the exact same script at the same time, the later save will overwrite the other developer's changes. Please edit different scripts or communicate before modifying code.
-
-You may also encounter:
-- Bugs and crashes
-- Connection problems or synchronization delays depending on your network
-- Unexpected behavior
-
-If you encounter a problem, please report it through the GitHub repository's **Issues** tab (including the error text from the server console) so it can be investigated and fixed.
+### 3. Host, Join, or Resume a Saved Room
+- **Host a new or saved place:** Click **Start Hosting Current Place** on the **Together** tab (or invite a friend directly).
+- **Resume an existing server room:** Open the **Saves & Rooms** tab and click any saved room on the server to join or resume it.
+- **Create or restore backups:** Use **Save & Create Backup Now** on the **Together** tab or manage checkpoints in the **Saves & Rooms** tab.
