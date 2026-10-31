@@ -16,6 +16,18 @@ set "SRV=%~dp0server.py"
 set "EXE=%~dp0PlaceTogetherServer.exe"
 set "DATA=%~dp0data.json"
 
+rem --- Optional server password ---------------------------------
+rem   StartPlaceTogetherServer.bat mypassword
+rem   or set PT_SECRET in the environment before running.
+rem   Every client must then enter the same password in the plugin
+rem   Settings tab (SERVER PASSWORD field).
+set "SECRET_ARGS="
+if not "%~1"=="" (
+    set "SECRET_ARGS=--secret "%~1""
+) else if defined PT_SECRET (
+    set "SECRET_ARGS=--secret "%PT_SECRET%""
+)
+
 rem --- Find Python: PATH, py launcher, portable folder --------
 set "PY_CMD="
 
@@ -84,6 +96,11 @@ if "%RUN_MODE%"=="PYTHON" (
 echo   Port         : %PORT%
 echo   Data Storage : %DATA%
 echo   Backups Dir  : %~dp0backups
+if defined SECRET_ARGS (
+    echo   Password     : enabled
+) else (
+    echo   Password     : OFF - anyone on this network can edit your place
+)
 echo.
 
 if defined RADMIN_IP   echo   [Radmin VPN]  : http://!RADMIN_IP!:%PORT%
@@ -111,9 +128,9 @@ echo   Server is running. Auto-save & backups enabled. Press Ctrl+C to stop.
 echo.
 
 if "%RUN_MODE%"=="PYTHON" (
-    !PY_CMD! "%SRV%" --port %PORT% --data "%DATA%"
+    !PY_CMD! "%SRV%" --port %PORT% --data "%DATA%" %SECRET_ARGS%
 ) else (
-    "%EXE%" --port %PORT% --data "%DATA%"
+    "%EXE%" --port %PORT% --data "%DATA%" %SECRET_ARGS%
 )
 set "EXITCODE=%errorlevel%"
 

@@ -5,3 +5,10 @@ _pyi_build/
 *.spec
 .vscode/
 .idea/
+
+# Server runtime data (private maps, backups, atomic-write leftovers)
+data.json
+data.json.bak
+data.json.tmp
+backups/
+tests/.tmp/

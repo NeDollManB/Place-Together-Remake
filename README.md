@@ -49,6 +49,16 @@ A high-performance custom plugin and synchronization engine for **Roblox Studio*
 - **Cursor & Caret Preservation:** When a friend's edits arrive while you are typing in the script editor, your cursor position and selection are smoothly preserved (`doc:SetSelection`) so you never lose your place or have your typing interrupted.
 - **Live Co-authoring Banner & Peer Script Tracker:** See in real time who is currently editing which script and what line they are working on, right in the plugin UI!
 
+### 7. Hardening & Developer Tooling (3.1)
+- **Race-free saves:** the disk snapshot is now serialized while holding the room lock. Previously `/sync` handlers could mutate rooms mid-`json.dump`, which silently aborted saves under load.
+- **Safe tombstone pruning:** deletions are dropped only once every connected peer has acknowledged them; the old code discarded an arbitrary half and could resurrect deleted objects for clients that were further behind.
+- **Idle polls no longer bump revisions**, so peers stop re-downloading deltas that carry no information.
+- **Optional server password** (`--secret` / `PT_SECRET`), guest session required for every room endpoint, owner-only backup restore, no wildcard CORS.
+- **Bounded requests and connections:** 64 MB body cap, `30 s` socket timeout, queue depth for bursts.
+- **Deterministic peer colours** (no random colour after a restart) and automatic cleanup of expired guests/invitations.
+- **Plugin resilience:** the sync loop backs off exponentially (0.15 s → 5 s) while the server is unreachable instead of retrying 6.6 times per second.
+- **`build.py`, tests and CI:** `PlaceTogether.rbxmx` is generated from `plugin_source.luau`, and a stdlib test suite covers sync, auth and persistence.
+
 ---
 
 ## 📦 Getting Started
@@ -68,3 +78,51 @@ Run [`StartPlaceTogetherServer.bat`](StartPlaceTogetherServer.bat).
 - **Host a new or saved place:** Click **Start Hosting Current Place** on the **Together** tab (or invite a friend directly).
 - **Resume an existing server room:** Open the **Saves & Rooms** tab and click any saved room on the server to join or resume it.
 - **Create or restore backups:** Use **Save & Create Backup Now** on the **Together** tab or manage checkpoints in the **Saves & Rooms** tab.
+
+### 4. Set a Server Password (recommended)
+The server has no cloud accounts: anyone who can reach `http://<your-ip>:8787` can read and edit the room.
+
+1. Start the server with a password: `StartPlaceTogetherServer.bat mypassword`, or set the `PT_SECRET` environment variable first.
+2. Every participant types the same password into **Settings → SERVER PASSWORD (OPTIONAL)** in the plugin.
+3. Requests without the password are rejected with `401`, and the server name/uptime endpoint stays the only public route.
+
+Additional hardening that is now enforced:
+- Every room endpoint requires an active guest session (the plugin registers one automatically).
+- **Restoring a room from a backup is owner-only** — guests get `403`.
+- Browser cross-origin access is disabled by default (pass `--cors-origin <origin>` if you build a web UI).
+- Request bodies are size-capped (`64 MB`), and malformed `Content-Length` gets `400` instead of a server traceback.
+
+---
+
+## 🛠 Development
+
+| File | Purpose |
+| --- | --- |
+| [`plugin_source.luau`](plugin_source.luau) | **Source of truth** for the Studio plugin |
+| [`PlaceTogether.rbxmx`](PlaceTogether.rbxmx) | Generated Roblox model — do not edit by hand |
+| [`server.py`](server.py) | Sync & persistence server |
+| [`build.py`](build.py) | Rebuilds `PlaceTogether.rbxmx` from the Luau source |
+| [`tests/test_server.py`](tests/test_server.py) | Server regression tests (stdlib only) |
+
+After editing the plugin source, rebuild the model file:
+
+```bash
+python build.py            # write PlaceTogether.rbxmx
+python build.py --check    # exit 1 if the .rbxmx is stale (used by CI)
+```
+
+Run the tests:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+CI (`.github/workflows/ci.yml`) runs the byte-compile check, `build.py --check` and the test suite on every push.
+
+If you changed `server.py` and ship the standalone executable, rebuild it — otherwise the `.bat` launcher falls back to the old bundled binary on machines without Python:
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --name PlaceTogetherServer server.py
+```
+

@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Byte-compile server
+        run: python -m py_compile server.py
+
+      - name: Verify the plugin build is up to date
+        run: python build.py --check
+
+      - name: Run server regression tests
+        run: python -m unittest discover -s tests -v

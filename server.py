@@ -19,9 +19,12 @@ import sys
 import os
 import json
 import time
+import hmac
 import shutil
 import signal
 import atexit
+import hashlib
+import difflib
 import argparse
 import threading
 from datetime import datetime
@@ -32,6 +35,10 @@ DEFAULT_PORT = 8787
 DATA_FILE = "data.json"
 MAX_BACKUPS_PER_ROOM = 25
 MAX_TOMBSTONES_PER_ROOM = 5000
+MAX_BODY_BYTES = 64 * 1024 * 1024   # hard cap for a single request body
+GUEST_TTL_SECONDS = 30 * 24 * 3600 # forget guests that have not been seen for a month
+INVITE_TTL_SECONDS = 24 * 3600     # forget finished invitations after a day
+CLIENT_REV_TTL_SECONDS = 60        # how long a peer counts as "still connected"
 
 # In-memory storage with re-entrant mutex
 lock = threading.RLock()
@@ -39,6 +46,12 @@ rooms = {}       # room_id -> { name, owner, revision, objects, tombstones, pres
 guests = {}      # token -> { name, deviceKey, last_seen }
 invitations = [] # list of { id, from, nick, room, place, state, recipientOnline, delivered, created_at }
 next_invite_id = 1
+
+# Optional shared secret (server password). When set, every API call must send
+# the X-PT-Secret header. Empty string means "no password" (legacy open mode).
+auth_secret = ""
+# Browser cross-origin access is disabled unless --cors-origin is passed.
+cors_origin = ""
 
 # Persistence state
 data_filepath = DATA_FILE
@@ -66,6 +79,55 @@ def mark_dirty(room_id=None):
             rooms[room_id]["updated_at"] = last_change_time
 
 
+def stable_hue(token):
+    """Deterministic peer colour. builtin hash() is salted per process, so the
+    same peer changed colour after every server restart."""
+    digest = hashlib.sha1(str(token or "").encode("utf-8")).hexdigest()
+    return (int(digest[:8], 16) % 100) / 100.0
+
+
+def cleanup_stale():
+    """Drop expired guests, invitations and presence entries.
+
+    Guests and invitations used to grow without bound (memory + data.json).
+    """
+    global dirty_flag
+    now = time.time()
+    changed = False
+    with lock:
+        owners = {r.get("owner") for r in rooms.values()}
+        stale_guests = [
+            tok for tok, g in guests.items()
+            if now - g.get("last_seen", 0) > GUEST_TTL_SECONDS and tok not in owners
+        ]
+        for tok in stale_guests:
+            guests.pop(tok, None)
+            changed = True
+
+        kept = []
+        for inv in invitations:
+            age = now - inv.get("created_at", now)
+            finished = inv.get("state") in ("accepted", "declined")
+            if age > INVITE_TTL_SECONDS or (finished and age > 600):
+                changed = True
+                continue
+            kept.append(inv)
+        if len(kept) != len(invitations):
+            invitations[:] = kept
+
+        for r in rooms.values():
+            presence = r.get("presence") or {}
+            for p_id in [pid for pid, p in presence.items() if now - p.get("time", 0) > 120]:
+                presence.pop(p_id, None)
+            clients = r.get("clients") or {}
+            for key in [k for k, v in clients.items() if now - v.get("time", 0) > CLIENT_REV_TTL_SECONDS]:
+                clients.pop(key, None)
+
+        if changed:
+            dirty_flag = True
+    return changed
+
+
 def serialize_room(r):
     return {
         "name": r.get("name", "Studio Project"),
@@ -82,11 +144,34 @@ def serialize_room(r):
 
 
 def prune_tombstones(r):
-    tombstones = r.get("tombstones", {})
-    if len(tombstones) > MAX_TOMBSTONES_PER_ROOM:
-        sorted_items = sorted(tombstones.items(), key=lambda item: item[1].get("version", 0))
-        keep = dict(sorted_items[-(MAX_TOMBSTONES_PER_ROOM // 2):])
-        r["tombstones"] = keep
+    """Drop tombstones no connected peer can still need.
+
+    Old behaviour kept an arbitrary half of the list, which silently resurrected
+    deleted objects for peers that were further behind. Now a tombstone is only
+    dropped once *every* recently active client already knows about it, i.e. its
+    version is <= the smallest `since` revision any peer is polling with.
+    """
+    tombstones = r.get("tombstones") or {}
+    if len(tombstones) <= MAX_TOMBSTONES_PER_ROOM:
+        return
+
+    now = time.time()
+    since_values = [
+        info.get("since", 0)
+        for info in r.get("clients", {}).values()
+        if now - info.get("time", 0) <= CLIENT_REV_TTL_SECONDS
+    ]
+    if not since_values:
+        # Nobody is connected (or nobody reported a revision yet): pruning here
+        # could resurrect deletions for a client that comes back, so keep them.
+        return
+
+    min_safe_rev = min(since_values)
+    r["tombstones"] = {
+        obj_id: tomb
+        for obj_id, tomb in tombstones.items()
+        if tomb.get("version", 0) > min_safe_rev
+    }
 
 
 def merge_3way_text(base_str, text_a, text_b):
@@ -97,7 +182,6 @@ def merge_3way_text(base_str, text_a, text_b):
     if not text_b:
         return text_a
 
-    import difflib
     lines_a = text_a.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     lines_b = text_b.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
@@ -121,6 +205,10 @@ def save_data(filepath=None, force=False):
     if filepath is None:
         filepath = data_filepath
 
+    # IMPORTANT: the whole snapshot is serialized while holding `lock`.
+    # Serializing after releasing it used to race with /sync handlers mutating
+    # room dictionaries mid-dump ("dictionary changed size during iteration"),
+    # which made saves fail silently under load and lose edits.
     with lock:
         if not dirty_flag and not force:
             return False
@@ -141,6 +229,13 @@ def save_data(filepath=None, force=False):
         dirty_flag = False
         last_disk_save_time = now
 
+        try:
+            text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        except Exception as e:
+            dirty_flag = True
+            print(f"[ERROR] Failed to serialize data: {e}", file=sys.stderr)
+            return False
+
     with save_lock:
         try:
             abs_path = os.path.abspath(filepath)
@@ -149,7 +244,7 @@ def save_data(filepath=None, force=False):
             bak_path = abs_path + ".bak"
 
             with open(temp_path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
+                f.write(text)
                 f.flush()
                 os.fsync(f.fileno())
 
@@ -361,13 +456,29 @@ def load_data(filepath):
         print(f"[INFO] Loaded {len(rooms)} rooms ({total_objs} objects) and {len(guests)} guests from {target_to_load}")
 
 
+class BodyTooLarge(Exception):
+    pass
+
+
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 128
 
 
 class PlaceTogetherHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # Without a timeout a half-open keep-alive connection (VPN drop, ngrok
+    # restart) keeps a worker thread alive forever and threads pile up.
+    timeout = 30
+
+    def handle(self):
+        # A peer that drops its tunnel (VPN reconnect, Studio restart) resets the
+        # keep-alive socket; socketserver would dump a full traceback for that.
+        try:
+            super().handle()
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, TimeoutError):
+            pass
 
     def log_message(self, format, *args):
         # Suppress console spam on high-frequency /sync, /presence, and /invitations polling
@@ -387,11 +498,16 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, bypass-tunnel-reminder")
+            # Cross-origin access is opt-in: a wildcard CORS policy let any web
+            # page in the user's browser drive this API (CSRF on 127.0.0.1).
+            if cors_origin:
+                self.send_header("Access-Control-Allow-Origin", cors_origin)
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-PT-Secret, bypass-tunnel-reminder")
             self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-            self.send_header("Connection", "keep-alive")
+            # If the request body was not fully consumed the connection cannot be
+            # reused: answering keep-alive there desynchronises the next request.
+            self.send_header("Connection", "close" if self.close_connection else "keep-alive")
             self.end_headers()
             self.wfile.write(body)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -399,9 +515,10 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, bypass-tunnel-reminder")
+        if cors_origin:
+            self.send_header("Access-Control-Allow-Origin", cors_origin)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-PT-Secret, bypass-tunnel-reminder")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -411,12 +528,58 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
             return auth[7:].strip()
         return None
 
+    def secret_ok(self):
+        """Optional server password (--secret / PT_SECRET)."""
+        if not auth_secret:
+            return True
+        supplied = self.headers.get("X-PT-Secret", "")
+        return hmac.compare_digest(str(supplied), auth_secret)
+
+    def require_secret(self):
+        if self.secret_ok():
+            return True
+        self.send_json(401, {"error": "Неверный пароль сервера (X-PT-Secret)"})
+        return False
+
+    def require_guest(self, token):
+        """Every room endpoint needs a registered guest token."""
+        if token and token in guests:
+            return True
+        self.send_json(401, {"error": "Нужна регистрация гостя. Переподключитесь к серверу."})
+        return False
+
     def read_body(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        if content_length > 0:
-            raw = self.rfile.read(content_length).decode("utf-8")
-            return json.loads(raw)
-        return {}
+        raw_length = self.headers.get("Content-Length")
+        try:
+            content_length = int(raw_length or 0)
+        except (TypeError, ValueError):
+            raise ValueError("invalid Content-Length header")
+        if content_length < 0:
+            raise ValueError("negative Content-Length header")
+        if content_length > MAX_BODY_BYTES:
+            raise BodyTooLarge(f"body larger than {MAX_BODY_BYTES} bytes")
+        if content_length == 0:
+            return {}
+        raw = self.rfile.read(content_length).decode("utf-8")
+        if not raw.strip():
+            return {}
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("JSON body must be an object")
+        return parsed
+
+    def remember_client_revision(self, r, token, since_rev):
+        """Track how far behind each connected peer is (drives tombstone pruning)."""
+        clients = r.setdefault("clients", {})
+        clients[token or "anonymous"] = {
+            "since": max(0, int(since_rev or 0)),
+            "time": time.time(),
+        }
+        if len(clients) > 64:
+            now = time.time()
+            stale = [k for k, v in clients.items() if now - v.get("time", 0) > CLIENT_REV_TTL_SECONDS]
+            for key in stale:
+                clients.pop(key, None)
 
     def compute_deltas_since(self, r, since_rev):
         deltas = {}
@@ -438,8 +601,13 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                     k, v = pair.split("=", 1)
                     query_params[k] = v
 
-        # 1. Health / Status check
+        token = self.get_token()
+
+        # 1. Health / Status check (public on purpose, contains no user data)
         if path == "/api/status" or path == "/":
+            if not self.secret_ok():
+                self.send_json(401, {"error": "Неверный пароль сервера"})
+                return
             with lock:
                 self.send_json(200, {
                     "server": "PlaceTogether-UltraFast",
@@ -449,11 +617,17 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                     "rooms_count": len(rooms),
                     "active_guests": len(guests),
                     "last_saved": last_disk_save_time,
+                    "auth_required": bool(auth_secret),
                 })
+            return
+
+        if not self.require_secret():
             return
 
         # 2. Get Rooms list
         if path == "/api/rooms":
+            if not self.require_guest(token):
+                return
             with lock:
                 now = time.time()
                 res = []
@@ -488,6 +662,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 3. Room sync GET: /api/rooms/<id>/sync with support for ?since=<rev>
         if path.startswith("/api/rooms/") and path.endswith("/sync"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             room_id = parts[3]
             with lock:
@@ -499,6 +675,7 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                     since_rev = int(query_params.get("since", 0))
                 except ValueError:
                     since_rev = 0
+                self.remember_client_revision(r, token, since_rev)
 
                 # Client is already up to date
                 if since_rev > 0 and since_rev == r["revision"]:
@@ -536,9 +713,10 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 4. Room state: /api/rooms/<id>/state
         if path.startswith("/api/rooms/") and path.endswith("/state"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             room_id = parts[3]
-            token = self.get_token()
             with lock:
                 if room_id not in rooms:
                     self.send_json(404, {"error": "Комната не найдена"})
@@ -566,6 +744,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 5. Room backups list: /api/rooms/<id>/backups
         if path.startswith("/api/rooms/") and path.endswith("/backups"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             room_id = parts[3]
             with lock:
@@ -578,7 +758,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 6. Invitations inbox
         if path == "/api/invitations":
-            token = self.get_token()
+            if not self.require_guest(token):
+                return
             with lock:
                 if token in guests:
                     guests[token]["last_seen"] = time.time()
@@ -593,7 +774,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 7. Invitations outbox
         if path == "/api/invitations/outbox":
-            token = self.get_token()
+            if not self.require_guest(token):
+                return
             with lock:
                 user_name = guests.get(token, {}).get("name", "")
                 now = time.time()
@@ -615,15 +797,26 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         try:
             data = self.read_body()
+        except BodyTooLarge:
+            self.close_connection = True
+            self.send_json(413, {"error": "Слишком большое тело запроса"})
+            return
         except Exception as e:
+            self.close_connection = True
             self.send_json(400, {"error": f"Invalid JSON body: {e}"})
             return
         token = self.get_token()
+
+        if not self.require_secret():
+            return
 
         # 1. Guest Registration
         if path == "/api/guest":
             name = str(data.get("name", "Guest")).strip() or "Guest"
             device_key = str(data.get("deviceKey", "")).strip()
+            if device_key and (len(device_key) > 128 or not device_key.isprintable()):
+                self.send_json(400, {"error": "Invalid deviceKey"})
+                return
             with lock:
                 guest_token = device_key if device_key else (token or f"token_{int(time.time()*1000)}")
                 old_name = guests.get(guest_token, {}).get("name")
@@ -647,6 +840,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 2. Create Room
         if path == "/api/rooms":
+            if not self.require_guest(token):
+                return
             name = str(data.get("name", "Studio Project")).strip() or "Studio Project"
             with lock:
                 user_name = guests.get(token, {}).get("name", "User")
@@ -676,6 +871,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 3. Join / Resume Existing Room: /api/rooms/<id>/join
         if path.startswith("/api/rooms/") and path.endswith("/join"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             room_id = parts[3]
             with lock:
@@ -697,6 +894,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 4. Synchronize POST: /api/rooms/<id>/sync
         if path.startswith("/api/rooms/") and path.endswith("/sync"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             room_id = parts[3]
             with lock:
@@ -705,10 +904,17 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                     return
                 r = rooms[room_id]
                 changes = data.get("changes", [])
+                if not isinstance(changes, list):
+                    self.send_json(400, {"error": "changes must be a list"})
+                    return
+                if len(changes) > 20000:
+                    self.send_json(413, {"error": "Слишком много изменений за один запрос"})
+                    return
                 try:
                     since_rev = int(data.get("since", 0))
-                except ValueError:
+                except (TypeError, ValueError):
                     since_rev = 0
+                self.remember_client_revision(r, token, since_rev)
 
                 # Collect remote changes that occurred since client's known revision BEFORE applying client's batch
                 remote_deltas = {}
@@ -742,6 +948,16 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                                         cli_src = new_props["Source"]
                                         if srv_src and cli_src and srv_src != cli_src:
                                             val["props"]["Source"] = merge_3way_text("", srv_src, cli_src)
+                        # Skip writes that would not change anything: idle polls used
+                        # to bump the room revision and make every peer re-download
+                        # a delta that carries no information.
+                        existing = r["objects"].get(obj_id)
+                        if (
+                            isinstance(existing, dict)
+                            and obj_id not in tombstones
+                            and existing.get("value") == val
+                        ):
+                            continue
                         rec = {"version": new_rev, "value": val}
                         r["objects"][obj_id] = rec
                         tombstones.pop(obj_id, None)
@@ -762,6 +978,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 5. Presence / Camera / Live Drag POST: /api/rooms/<id>/presence
         if path.startswith("/api/rooms/") and path.endswith("/presence"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             room_id = parts[3]
             with lock:
@@ -786,7 +1004,7 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                         "transforms": data.get("transforms", {}),
                         "teamTest": data.get("teamTest", None),
                         "activeScript": data.get("activeScript", None),
-                        "hue": (hash(token) % 100) / 100.0,
+                        "hue": stable_hue(token),
                         "time": time.time(),
                     }
 
@@ -805,6 +1023,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 6. Invite Friend POST: /api/invitations
         if path == "/api/invitations":
+            if not self.require_guest(token):
+                return
             global next_invite_id
             target_nick = str(data.get("nick", "")).strip()
             room_id = str(data.get("room", "")).strip()
@@ -835,6 +1055,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 7. Respond to Invitation POST: /api/invitations/<id>/respond
         if path.startswith("/api/invitations/") and path.endswith("/respond"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             inv_id = parts[3]
             decision = data.get("decision", "accept")
@@ -859,6 +1081,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
 
         # 8. Save Room & Create Backup: /api/rooms/<id>/save
         if path.startswith("/api/rooms/") and path.endswith("/save"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             room_id = parts[3]
             label = str(data.get("label", "manual")).strip() or "manual"
@@ -892,10 +1116,22 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
             return
 
         # 9. Restore Room from Backup: /api/rooms/<id>/restore
+        # Restoring rewrites every object of the room, so only the owner may do it.
         if path.startswith("/api/rooms/") and path.endswith("/restore"):
+            if not self.require_guest(token):
+                return
             parts = path.split("/")
             room_id = parts[3]
             backup_id = data.get("backupId")
+            with lock:
+                r = rooms.get(room_id)
+                if r is None:
+                    self.send_json(404, {"error": "Комната не найдена"})
+                    return
+                is_owner = r.get("owner") == token
+            if not is_owner:
+                self.send_json(403, {"error": "Восстановить комнату может только её владелец"})
+                return
             result, err = restore_room_backup(room_id, backup_id)
             if err:
                 self.send_json(400, {"error": err})
@@ -923,12 +1159,26 @@ def setup_shutdown_hooks():
 
 
 def main():
-    global data_filepath, backups_dir
+    global data_filepath, backups_dir, auth_secret, cors_origin
     parser = argparse.ArgumentParser(description="PlaceTogether Ultra-Fast Server v3.0")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"Port to bind (default: {DEFAULT_PORT})")
     parser.add_argument("--data", type=str, default=DATA_FILE, help="Path to data JSON file")
+    parser.add_argument(
+        "--secret",
+        type=str,
+        default=os.environ.get("PT_SECRET", ""),
+        help="Shared password. When set, clients must send X-PT-Secret (env: PT_SECRET)",
+    )
+    parser.add_argument(
+        "--cors-origin",
+        type=str,
+        default=os.environ.get("PT_CORS_ORIGIN", ""),
+        help="Allow browser cross-origin access from this exact origin (default: disabled)",
+    )
     args = parser.parse_args()
 
+    auth_secret = str(args.secret or "")
+    cors_origin = str(args.cors_origin or "")
     data_filepath = os.path.abspath(args.data)
     backups_dir = get_backups_dir(data_filepath)
 
@@ -941,6 +1191,7 @@ def main():
     def auto_saver():
         last_auto_backup_rev = {r_id: r["revision"] for r_id, r in rooms.items()}
         last_backup_check = time.time()
+        last_cleanup = time.time()
         while True:
             time.sleep(1.0)
             now = time.time()
@@ -952,6 +1203,10 @@ def main():
                         should_save = True
             if should_save:
                 save_data(data_filepath)
+
+            if now - last_cleanup >= 60.0:
+                last_cleanup = now
+                cleanup_stale()
 
             # Periodic auto-snapshot every 5 minutes for rooms with new revisions
             if now - last_backup_check >= 300.0:
@@ -977,6 +1232,7 @@ def main():
     print(f"  PlaceTogether Ultra-Fast Server 3.0 running on port {args.port}")
     print(f"  Data File : {data_filepath}")
     print(f"  Backups   : {backups_dir}")
+    print(f"  Password  : {'enabled (X-PT-Secret)' if auth_secret else 'disabled (open on the network!)'}")
     print("  Features  : Lossless Delta Sync | Live 60FPS Drag | Auto-Save")
     print("============================================================")
     try:

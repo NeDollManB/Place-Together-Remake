@@ -477,6 +477,24 @@ local addressHint = textLabel("All participants must enter the same server addre
 addressHint.TextSize = 11
 addressHint.TextColor3 = palette.subtle
 
+do
+	local header = textLabel("SERVER PASSWORD (OPTIONAL)", 14)
+	header.Font = Enum.Font.GothamBold
+	header.TextSize = 10
+	header.TextColor3 = palette.subtle
+end
+
+local serverSecret = field("Leave empty if the server has no password", plugin:GetSetting("PTSecret") or "")
+
+do
+	local hint = textLabel("Must match --secret / PT_SECRET on the server.", 18)
+	hint.TextSize = 11
+	hint.TextColor3 = palette.subtle
+end
+serverSecret.FocusLost:Connect(function()
+	plugin:SetSetting("PTSecret", serverSecret.Text)
+end)
+
 local presenceToggle = makeButton("Peer Cursors & Live Drag: On")
 local smoothToggle = makeButton("Smooth 60FPS Part Lerp: On")
 local logout = makeButton("Reconnect to Server")
@@ -1694,7 +1712,8 @@ local function request(method, payload, renewed)
 		Headers = {
 			Authorization = "Bearer "..credential,
 			["Content-Type"] = "application/json",
-			["bypass-tunnel-reminder"] = "true"
+			["bypass-tunnel-reminder"] = "true",
+			["X-PT-Secret"] = serverSecret.Text,
 		},
 		Body = payload and Http:JSONEncode(payload) or nil
 	})
@@ -2186,7 +2205,8 @@ local function api(path, method, payload, renewed)
 		Headers = {
 			Authorization = "Bearer "..token.Text,
 			["Content-Type"] = "application/json",
-			["bypass-tunnel-reminder"] = "true"
+			["bypass-tunnel-reminder"] = "true",
+			["X-PT-Secret"] = serverSecret.Text,
 		},
 		Body = payload and Http:JSONEncode(payload) or nil
 	})
@@ -2275,6 +2295,10 @@ local function connectSession()
 			address.Text = c.server
 			room.Text = c.room
 			token.Text = c.token
+			if type(c.secret) == "string" then
+				serverSecret.Text = c.secret
+				plugin:SetSetting("PTSecret", c.secret)
+			end
 			setup.Text = ""
 		end
 		local b = base()
@@ -2738,8 +2762,9 @@ end)
 
 -- High-frequency incremental sync loop (0.15s = ~6.6 Hz, O(dirty) overhead < 0.05ms)
 task.spawn(function()
+	local backoff = 0
 	while true do
-		task.wait(0.15)
+		task.wait(0.15 + backoff)
 		if active and not busy and not Run:IsRunning() then
 			busy = true
 			local ok, err = pcall(function()
@@ -2752,7 +2777,11 @@ task.spawn(function()
 				)
 			end)
 			busy = false
-			if not ok then
+			if ok then
+				backoff = 0
+			else
+				-- Server unreachable or overloaded: slow down instead of hammering it at 6.6 Hz.
+				backoff = math.min(backoff > 0 and backoff * 2 or 0.5, 5)
 				status("Sync retrying automatically: "..tostring(err))
 			end
 		elseif active and Run:IsRunning() then
