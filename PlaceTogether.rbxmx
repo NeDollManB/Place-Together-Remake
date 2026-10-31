@@ -366,6 +366,22 @@ local connect = makeButton("Leave Session", sessionCard, "danger", 34)
 connect.Visible = false
 
 -- CO-OP TEAM TEST UI CARD
+-- REAL-TIME SCRIPT COLLABORATION CARD
+local scriptCollabCard = card(homePanel, "ScriptCollabCard")
+local scBadge = textLabel("REAL-TIME SCRIPT CO-AUTHORING", 14, scriptCollabCard)
+scBadge.Font = Enum.Font.GothamBold
+scBadge.TextSize = 9
+scBadge.TextColor3 = palette.accent
+
+local scTitle = title("Concurrent Script Editing Active", scriptCollabCard)
+local scDesc = textLabel("You and your peers can edit the same script at the same time! 3-way line diffing merges your code automatically without overwriting.", 28, scriptCollabCard)
+scDesc.TextSize = 11
+scDesc.TextColor3 = palette.muted
+
+local scActiveLabel = textLabel("Open any script in Studio to start co-editing.", 18, scriptCollabCard)
+scActiveLabel.TextSize = 11
+scActiveLabel.TextColor3 = palette.subtle
+
 local teamTestCard = card(homePanel, "TeamTestCard")
 local ttBadge = textLabel("CO-OP TEAM TEST (PLAYTEST MODE)", 14, teamTestCard)
 ttBadge.Font = Enum.Font.GothamBold
@@ -517,6 +533,7 @@ end
 -- ============================================================
 -- CORE SYNC ENGINE & EVENT-DRIVEN DIRTY TRACKER
 -- ============================================================
+local currentActiveScriptInfo = nil
 local active = false
 local busy = false
 local restoreSuppressed = false
@@ -662,7 +679,212 @@ local function copy(value)
 	return result
 end
 
-local function merge(base, localValue, remote)
+-- ============================================================
+-- REAL-TIME COLLABORATIVE SCRIPT MERGE ENGINE (3-WAY MERGE)
+-- ============================================================
+local function splitLines(text)
+	local lines = {}
+	if not text or text == "" then return lines end
+	local clean = text:gsub(string.char(13, 10), string.char(10)):gsub(string.char(13), string.char(10))
+	local pos = 1
+	local len = #clean
+	while pos <= len do
+		local nl = clean:find(string.char(10), pos, true)
+		if nl then
+			table.insert(lines, clean:sub(pos, nl - 1))
+			pos = nl + 1
+		else
+			table.insert(lines, clean:sub(pos))
+			break
+		end
+	end
+	if clean:sub(-1) == string.char(10) then
+		table.insert(lines, "")
+	end
+	return lines
+end
+
+local function lcsMatch(a, b)
+	local n, m = #a, #b
+	local pref = 0
+	while pref < n and pref < m and a[pref + 1] == b[pref + 1] do
+		pref = pref + 1
+	end
+
+	local suf = 0
+	while suf < (n - pref) and suf < (m - pref) and a[n - suf] == b[m - suf] do
+		suf = suf + 1
+	end
+
+	local midA_len = n - pref - suf
+	local midB_len = m - pref - suf
+	local pairs = {}
+	local matchedA = {}
+	local matchedB = {}
+
+	for k = 1, pref do
+		pairs[k] = k
+		matchedA[k] = true
+		matchedB[k] = true
+	end
+	for k = 0, suf - 1 do
+		local aIdx = n - k
+		local bIdx = m - k
+		pairs[aIdx] = bIdx
+		matchedA[aIdx] = true
+		matchedB[bIdx] = true
+	end
+
+	if midA_len > 0 and midB_len > 0 then
+		local dp = {}
+		for i = 0, midA_len do
+			dp[i] = {}
+			for j = 0, midB_len do
+				dp[i][j] = 0
+			end
+		end
+
+		for i = 1, midA_len do
+			local lineA = a[pref + i]
+			for j = 1, midB_len do
+				if lineA == b[pref + j] then
+					dp[i][j] = dp[i - 1][j - 1] + 1
+				else
+					local v1 = dp[i - 1][j]
+					local v2 = dp[i][j - 1]
+					dp[i][j] = (v1 > v2) and v1 or v2
+				end
+			end
+		end
+
+		local i, j = midA_len, midB_len
+		while i > 0 and j > 0 do
+			if a[pref + i] == b[pref + j] then
+				local aIdx = pref + i
+				local bIdx = pref + j
+				pairs[aIdx] = bIdx
+				matchedA[aIdx] = true
+				matchedB[bIdx] = true
+				i = i - 1
+				j = j - 1
+			elseif dp[i - 1][j] >= dp[i][j - 1] then
+				i = i - 1
+			else
+				j = j - 1
+			end
+		end
+	end
+
+	return pairs, matchedA, matchedB
+end
+
+local function analyzeDiff(baseLines, modLines)
+	local pairs, matchedBase, matchedMod = lcsMatch(baseLines, modLines)
+	local n = #baseLines
+	local m = #modLines
+	local insertsBefore = {}
+	for i = 1, n + 1 do
+		insertsBefore[i] = {}
+	end
+
+	local curBase = 1
+	for j = 1, m do
+		if matchedMod[j] then
+			for aIdx, bIdx in pairs(pairs) do
+				if bIdx == j then
+					curBase = aIdx + 1
+					break
+				end
+			end
+		else
+			local target = (curBase <= n) and curBase or (n + 1)
+			table.insert(insertsBefore[target], modLines[j])
+		end
+	end
+
+	local stateOf = {}
+	for i = 1, n do
+		stateOf[i] = matchedBase[i] and "equal" or "deleted"
+	end
+
+	return insertsBefore, stateOf
+end
+
+local function merge3WayText(baseStr, localStr, remoteStr)
+	if localStr == baseStr then
+		return remoteStr, (remoteStr ~= baseStr)
+	end
+	if remoteStr == baseStr or localStr == remoteStr then
+		return localStr, false
+	end
+
+	local base = splitLines(baseStr)
+	local localLines = splitLines(localStr)
+	local remoteLines = splitLines(remoteStr)
+
+	local insLoc, stateLoc = analyzeDiff(base, localLines)
+	local insRem, stateRem = analyzeDiff(base, remoteLines)
+
+	local result = {}
+	local n = #base
+
+	local function appendLines(lines)
+		for _, l in ipairs(lines) do
+			table.insert(result, l)
+		end
+	end
+
+	local function sameLines(a, b)
+		if #a ~= #b then return false end
+		for k = 1, #a do
+			if a[k] ~= b[k] then return false end
+		end
+		return true
+	end
+
+	for i = 1, n + 1 do
+		local locIn = insLoc[i] or {}
+		local remIn = insRem[i] or {}
+
+		if #locIn > 0 and #remIn == 0 then
+			appendLines(locIn)
+		elseif #remIn > 0 and #locIn == 0 then
+			appendLines(remIn)
+		elseif #locIn > 0 and #remIn > 0 then
+			if sameLines(locIn, remIn) then
+				appendLines(locIn)
+			else
+				appendLines(remIn)
+				appendLines(locIn)
+			end
+		end
+
+		if i <= n then
+			local stL = stateLoc[i]
+			local stR = stateRem[i]
+			if stL == "deleted" and stR == "deleted" then
+				-- Both deleted
+			elseif stL == "deleted" and stR == "equal" then
+				-- Local deleted
+			elseif stR == "deleted" and stL == "equal" then
+				-- Remote deleted
+			else
+				-- Neither deleted
+				table.insert(result, base[i])
+			end
+		end
+	end
+
+	return table.concat(result, "\n"), true
+end
+
+local function merge(base, localValue, remote, keyName)
+	if keyName == "Source" and (type(localValue) == "string" or type(remote) == "string") then
+		local bStr = (type(base) == "string") and base or ""
+		local lStr = (type(localValue) == "string") and localValue or ""
+		local rStr = (type(remote) == "string") and remote or ""
+		return merge3WayText(bStr, lStr, rStr)
+	end
 	if equal(localValue, base) then return copy(remote) end
 	if equal(remote, base) or equal(localValue, remote) then return copy(localValue) end
 	if type(localValue) ~= "table" or type(remote) ~= "table" or localValue.t or remote.t then return copy(localValue) end
@@ -676,7 +898,7 @@ local function merge(base, localValue, remote)
 	end
 	for key in pairs(keys) do
 		local previous = (type(base) == "table") and base[key] or nil
-		result[key] = merge(previous, localValue[key], remote[key])
+		result[key] = merge(previous, localValue[key], remote[key], key)
 	end
 	return result
 end
@@ -1236,6 +1458,35 @@ local function setupRootWatchers()
 				local scr = doc:GetScript()
 				if scr and ids[scr] then
 					dirtyKeys[ids[scr]] = true
+					local cLine, cCol = doc:GetSelection()
+					currentActiveScriptInfo = {
+						id = ids[scr],
+						name = scr.Name,
+						line = cLine or 1,
+						col = cCol or 1,
+					}
+				end
+			end)
+		end))
+		table.insert(rootConnections, Editor.TextDocumentDidOpen:Connect(function(doc)
+			pcall(function()
+				local scr = doc:GetScript()
+				if scr and ids[scr] then
+					local cLine, cCol = doc:GetSelection()
+					currentActiveScriptInfo = {
+						id = ids[scr],
+						name = scr.Name,
+						line = cLine or 1,
+						col = cCol or 1,
+					}
+				end
+			end)
+		end))
+		table.insert(rootConnections, Editor.TextDocumentDidClose:Connect(function(doc)
+			pcall(function()
+				local scr = doc:GetScript()
+				if scr and ids[scr] and currentActiveScriptInfo and currentActiveScriptInfo.id == ids[scr] then
+					currentActiveScriptInfo = nil
 				end
 			end)
 		end))
@@ -1505,6 +1756,49 @@ local function loadMesh(obj, key, value)
 	end
 end
 
+local function applyScriptSourceWithCursorPreservation(obj, key, newSource)
+	local curText = ""
+	local okCur, t = pcall(Editor.GetEditorSource, Editor, obj)
+	if okCur and type(t) == "string" then
+		curText = t:gsub(string.char(13, 10), string.char(10)):gsub(string.char(13), string.char(10))
+	else
+		pcall(function() curText = obj.Source end)
+	end
+
+	if curText == newSource then return end
+
+	local doc = nil
+	pcall(function() doc = Editor:FindScriptDocument(obj) end)
+
+	local cLine, cCol = 1, 1
+	if doc then
+		pcall(function() cLine, cCol = doc:GetSelection() end)
+	end
+
+	local updatedOk = pcall(function()
+		Editor:UpdateSourceAsync(obj, function() return newSource end)
+	end)
+	if not updatedOk then
+		pcall(function() obj.Source = newSource end)
+	end
+
+	if doc then
+		pcall(function()
+			local newLines = splitLines(newSource)
+			local safeLine = math.clamp(cLine, 1, math.max(1, #newLines))
+			doc:SetSelection(safeLine, cCol, safeLine, cCol)
+		end)
+	end
+
+	if cachedSnapshot[key] and cachedSnapshot[key].props then
+		cachedSnapshot[key].props.Source = newSource
+	end
+	if baseline[key] and baseline[key].props then
+		baseline[key].props.Source = newSource
+	end
+	dirtyKeys[key] = nil
+end
+
 local function apply(remote, sent, force)
 	local changed = {}
 	for key, record in pairs(remote) do
@@ -1668,9 +1962,7 @@ local function apply(remote, sent, force)
 						error("Linked instance still loading")
 					end
 					if name == "Source" and obj:IsA("LuaSourceContainer") then
-						if Editor:GetEditorSource(obj) ~= value then
-							Editor:UpdateSourceAsync(obj, function() return value end)
-						end
+						applyScriptSourceWithCursorPreservation(obj, key, value)
 					elseif obj:IsA("Model") and (name == "CFrame" or name == "WorldPivot") then
 						local cf = decode(value)
 						if typeof(cf) == "CFrame" then
@@ -3429,6 +3721,33 @@ do
 		for _, tName in ipairs(testers) do table.insert(allTesters, tName) end
 
 		ttActiveUsersLabel.Text = #allTesters > 0 and ("👥 Active testers: " .. table.concat(allTesters, ", ")) or "No active testers in room."
+
+		-- Update Active Script Co-Authors
+		local scriptingPeers = {}
+		local inSameScript = false
+		for _, peer in ipairs(peers) do
+			if peer.activeScript and peer.activeScript.name then
+				local sDesc = peer.name .. " in '" .. peer.activeScript.name .. "' (Line " .. tostring(peer.activeScript.line or 1) .. ")"
+				table.insert(scriptingPeers, sDesc)
+				if currentActiveScriptInfo and peer.activeScript.id == currentActiveScriptInfo.id then
+					inSameScript = peer.name
+				end
+			end
+		end
+
+		if inSameScript then
+			scActiveLabel.Text = "🟢 Live Co-authoring '" .. currentActiveScriptInfo.name .. "' with " .. inSameScript .. "!"
+			scActiveLabel.TextColor3 = palette.green
+		elseif #scriptingPeers > 0 then
+			scActiveLabel.Text = "✏️ " .. table.concat(scriptingPeers, " · ")
+			scActiveLabel.TextColor3 = palette.accent
+		elseif currentActiveScriptInfo then
+			scActiveLabel.Text = "You are editing '" .. currentActiveScriptInfo.name .. "' (Line " .. tostring(currentActiveScriptInfo.line or 1) .. ")"
+			scActiveLabel.TextColor3 = palette.muted
+		else
+			scActiveLabel.Text = "Open any script in Studio to start co-editing."
+			scActiveLabel.TextColor3 = palette.subtle
+		end
 		if hudActiveUsersLabel then
 			hudActiveUsersLabel.Text = "👥 " .. table.concat(allTesters, ", ")
 		end
@@ -3495,6 +3814,7 @@ do
 			selected = selected,
 			transforms = transforms,
 			teamTest = teamTestData,
+			activeScript = currentActiveScriptInfo,
 		}
 	end
 

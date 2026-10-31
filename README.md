@@ -42,6 +42,13 @@ A high-performance custom plugin and synchronization engine for **Roblox Studio*
 - **In-Game Chat Bubbles & HUD:** Press `/` or click the chat bar to type messages that pop up as overhead speech bubbles for everyone in the session.
 - **Map Protection:** Test avatars reside in an un-archived folder (`PlaceTogetherTeamTest`), ensuring playtesting never interferes with or corrupts map synchronization.
 
+### 6. Real-Time Collaborative Script Editing (3-Way Merge)
+- **Simultaneous Co-Authoring:** Two or more developers can now edit the exact same Luau script at the exact same time without overwriting each other's work!
+- **3-Way Line Diff & LCS Merge Engine:** Both server and plugin run an intelligent 3-Way diff & merge algorithm. If Developer A edits function `foo()` at the top of a script while Developer B edits `bar()` at the bottom, both changes cleanly merge together automatically without conflicts.
+- **Live Script Document Integration (`ScriptEditorService`):** Applied remotely using `ScriptEditorService:UpdateSourceAsync` directly into open tabs in Studio without closing them.
+- **Cursor & Caret Preservation:** When a friend's edits arrive while you are typing in the script editor, your cursor position and selection are smoothly preserved (`doc:SetSelection`) so you never lose your place or have your typing interrupted.
+- **Live Co-authoring Banner & Peer Script Tracker:** See in real time who is currently editing which script and what line they are working on, right in the plugin UI!
+
 ---
 
 ## 📦 Getting Started

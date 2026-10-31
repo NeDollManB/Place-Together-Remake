@@ -89,6 +89,33 @@ def prune_tombstones(r):
         r["tombstones"] = keep
 
 
+def merge_3way_text(base_str, text_a, text_b):
+    if text_a == text_b:
+        return text_a
+    if not text_a:
+        return text_b
+    if not text_b:
+        return text_a
+
+    import difflib
+    lines_a = text_a.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    lines_b = text_b.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+
+    matcher = difflib.SequenceMatcher(None, lines_a, lines_b)
+    res = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            res.extend(lines_a[i1:i2])
+        elif tag == "replace":
+            res.extend(lines_a[i1:i2])
+            res.extend(lines_b[j1:j2])
+        elif tag == "delete":
+            res.extend(lines_a[i1:i2])
+        elif tag == "insert":
+            res.extend(lines_b[j1:j2])
+    return "\n".join(res)
+
+
 def save_data(filepath=None, force=False):
     global dirty_flag, last_disk_save_time
     if filepath is None:
@@ -703,6 +730,18 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                             applied_count += 1
                     else:
                         val = ch.get("value")
+                        if obj_id in r["objects"] and isinstance(val, dict):
+                            old_rec = r["objects"][obj_id]
+                            old_val = old_rec.get("value") if isinstance(old_rec, dict) else None
+                            if isinstance(old_val, dict) and old_rec.get("version", 0) > since_rev:
+                                cur_props = old_val.get("props")
+                                new_props = val.get("props")
+                                if isinstance(cur_props, dict) and isinstance(new_props, dict):
+                                    if "Source" in cur_props and "Source" in new_props:
+                                        srv_src = cur_props["Source"]
+                                        cli_src = new_props["Source"]
+                                        if srv_src and cli_src and srv_src != cli_src:
+                                            val["props"]["Source"] = merge_3way_text("", srv_src, cli_src)
                         rec = {"version": new_rev, "value": val}
                         r["objects"][obj_id] = rec
                         tombstones.pop(obj_id, None)
@@ -746,6 +785,7 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                         "selected": data.get("selected", []),
                         "transforms": data.get("transforms", {}),
                         "teamTest": data.get("teamTest", None),
+                        "activeScript": data.get("activeScript", None),
                         "hue": (hash(token) % 100) / 100.0,
                         "time": time.time(),
                     }
