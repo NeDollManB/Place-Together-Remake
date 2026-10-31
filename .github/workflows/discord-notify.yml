@@ -1,0 +1,156 @@
+name: Discord Notification
+
+on:
+  push:
+    branches: [ "**" ]
+  release:
+    types: [ published ]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send notification to Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          ROLE_ID: ${{ secrets.DISCORD_ROLE_ID }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          AVATAR_URL: ${{ github.event.sender.avatar_url }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+          COMMIT_HASH: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_URL: ${{ github.event.release.html_url }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+        run: |
+          python3 - << 'EOF'
+          import os, json, urllib.request, time
+
+          webhook_url = os.environ.get("DISCORD_WEBHOOK")
+          role_id = os.environ.get("ROLE_ID", "").strip()
+          event = os.environ.get("EVENT_NAME")
+          repo = os.environ.get("REPO")
+          actor = os.environ.get("ACTOR")
+          avatar = os.environ.get("AVATAR_URL")
+          actor_url = f"https://github.com/{actor}"
+          
+          # Текущее время в формате Discord timestamp
+          now_ts = int(time.time())
+          time_str = f"<t:{now_ts}:f> (<t:{now_ts}:R>)"
+
+          if not webhook_url:
+              print("Error: DISCORD_WEBHOOK is not set!")
+              exit(1)
+
+          content = f"<@&{role_id}>" if role_id else ""
+
+          if event == "push":
+              branch = os.environ.get("BRANCH")
+              commit_msg = os.environ.get("COMMIT_MSG", "Без описания").strip()
+              commit_url = os.environ.get("COMMIT_URL", f"https://github.com/{repo}")
+              commit_hash = os.environ.get("COMMIT_HASH", "")[:7]
+
+              embed = {
+                  "title": f"🚀 Новый коммит в [{repo}]",
+                  "url": commit_url,
+                  "color": 5763719,  # Зелёный цвет Discord
+                  "author": {
+                      "name": actor,
+                      "url": actor_url,
+                      "icon_url": avatar
+                  },
+                  "fields": [
+                      {
+                          "name": "👤 Автор",
+                          "value": f"[{actor}]({actor_url})",
+                          "inline": True
+                      },
+                      {
+                          "name": "🌿 Ветка",
+                          "value": f"`{branch}`",
+                          "inline": True
+                      },
+                      {
+                          "name": "🕒 Дата и время",
+                          "value": time_str,
+                          "inline": False
+                      },
+                      {
+                          "name": "📝 Что изменено",
+                          "value": f"```{commit_msg[:900]}```" if commit_msg else "_Без описания_",
+                          "inline": False
+                      }
+                  ],
+                  "footer": {
+                      "text": f"Репозиторий: {repo} • Хеш: {commit_hash}"
+                  }
+              }
+
+          elif event == "release":
+              tag = os.environ.get("RELEASE_TAG")
+              name = os.environ.get("RELEASE_NAME") or tag
+              rel_url = os.environ.get("RELEASE_URL", f"https://github.com/{repo}/releases")
+              body = os.environ.get("RELEASE_BODY", "").strip() or "_Описание релиза отсутствует_"
+
+              embed = {
+                  "title": f"🎉 Опубликован релиз: {name}",
+                  "url": rel_url,
+                  "color": 16705372,  # Золотой цвет Discord
+                  "author": {
+                      "name": actor,
+                      "url": actor_url,
+                      "icon_url": avatar
+                  },
+                  "fields": [
+                      {
+                          "name": "👤 Кто опубликовал",
+                          "value": f"[{actor}]({actor_url})",
+                          "inline": True
+                      },
+                      {
+                          "name": "🏷️ Версия (тег)",
+                          "value": f"`{tag}`",
+                          "inline": True
+                      },
+                      {
+                          "name": "🕒 Дата и время",
+                          "value": time_str,
+                          "inline": False
+                      },
+                      {
+                          "name": "📋 Описание релиза",
+                          "value": body[:1000],
+                          "inline": False
+                      }
+                  ],
+                  "footer": {
+                      "text": f"Репозиторий: {repo}"
+                  }
+              }
+
+          payload = {
+              "content": content,
+              "allowed_mentions": {"roles": [role_id]} if role_id else {},
+              "embeds": [embed]
+          }
+
+          req = urllib.request.Request(
+              webhook_url,
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Content-Type": "application/json",
+                  "User-Agent": "GitHub-Actions-Notifier"
+              }
+          )
+
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  print(f"Success: {resp.status}")
+          except Exception as e:
+              print(f"Failed to send webhook: {e}")
+              exit(1)
+          EOF
