@@ -30,6 +30,8 @@ for _, name in ipairs(roots) do
 end
 
 local props = {
+	"Archivable", "TopSurface", "BottomSurface", "LeftSurface",
+	"RightSurface", "FrontSurface", "BackSurface", "MaterialVariant",
 	"Anchored", "CanCollide", "CanTouch", "CanQuery", "Transparency",
 	"Reflectance", "Color", "Material", "Size", "CFrame", "Shape",
 	"MeshId", "TextureID", "TextureId", "Texture", "Face", "Enabled",
@@ -42,6 +44,8 @@ local props = {
 	"DisplayOrder", "ResetOnSpawn", "Disabled", "Ambient",
 	"OutdoorAmbient", "ClockTime", "FogEnd", "FogStart", "FogColor"
 }
+
+local sessionDeviceKey = (Http:GenerateGUID(false)..Http:GenerateGUID(false)):gsub("-", ""):lower()
 
 local savedAddress = plugin:GetSetting("PTAddress") or "http://127.0.0.1:8787"
 if type(savedAddress) ~= "string" or savedAddress == "" then
@@ -1327,7 +1331,8 @@ local function properties(obj)
 		end
 	end
 	local ok, info = pcall(function()
-		return Reflection:GetPropertiesOfClass(class, {ExcludeDisplay = true})
+		local ref = game:GetService("ReflectionService")
+		return ref and ref:GetPropertiesOfClass(class, {ExcludeDisplay = true})
 	end)
 	if ok and info then
 		for _, p in ipairs(info) do
@@ -1336,13 +1341,11 @@ local function properties(obj)
 			end
 		end
 	end
-	for _, group in ipairs({common, props}) do
-		for _, name in ipairs(group) do
-			local good = pcall(rawGetProp, obj, name)
-			if good then add(name) end
-		end
+	for _, name in ipairs(props) do
+		local good = pcall(rawGetProp, obj, name)
+		if good then add(name) end
 	end
-	for _, name in ipairs(appearanceProps) do
+	for name in pairs(PropRules.appearanceSet) do
 		local good = pcall(rawGetProp, obj, name)
 		if good then add(name) end
 	end
@@ -2405,11 +2408,7 @@ guestEnter = function(rename)
 		status("Enter server address in Settings tab")
 		return
 	end
-	local key = plugin:GetSetting("PTGuestDeviceKey") or plugin:GetSetting("PTGuestDeviceKey:"..base())
-	if type(key) ~= "string" or #key ~= 64 then
-		key = (Http:GenerateGUID(false)..Http:GenerateGUID(false)):gsub("-", ""):lower()
-		plugin:SetSetting("PTGuestDeviceKey:"..base(), key)
-	end
+	local key = sessionDeviceKey
 	if selfNick.Text == "" then
 		pcall(function()
 			local uid = game:GetService("StudioService"):GetUserId()
@@ -2421,7 +2420,6 @@ guestEnter = function(rename)
 			selfNick.Text = "User_"..key:sub(1, 6)
 		end
 	end
-	plugin:SetSetting("PTGuestDeviceKey", key)
 	local value = api("/guest", "POST", {name = selfNick.Text, deviceKey = key, rename = (rename == true)})
 	token.Text = value.token
 	credential = value.token

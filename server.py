@@ -132,6 +132,7 @@ def serialize_room(r):
     return {
         "name": r.get("name", "Studio Project"),
         "owner": r.get("owner", ""),
+        "owner_name": r.get("owner_name", ""),
         "revision": r.get("revision", 1),
         "objects": r.get("objects", {}),
         "tombstones": r.get("tombstones", {}),
@@ -440,6 +441,7 @@ def load_data(filepath):
             rooms[r_id] = {
                 "name": r.get("name", "Room"),
                 "owner": r.get("owner", ""),
+                "owner_name": r.get("owner_name", ""),
                 "revision": int(r.get("revision", 1)),
                 "objects": r.get("objects", {}),
                 "tombstones": r.get("tombstones", {}),
@@ -729,15 +731,17 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                     return
                 r = rooms[room_id]
                 now = time.time()
+                user_name = guests.get(token, {}).get("name", "")
                 active_testers = [
                     p.get("name", "Peer")
                     for p in r.get("presence", {}).values()
                     if p.get("teamTest", {}).get("active") and now - p.get("time", 0) < 15
                 ]
+                is_owner = (r["owner"] == token) or (user_name != "" and user_name.lower() == r.get("owner_name", "").lower())
                 self.send_json(200, {
                     "id": room_id,
                     "name": r["name"],
-                    "isOwner": (r["owner"] == token),
+                    "isOwner": is_owner,
                     "closed": r.get("closed", False),
                     "persistent": r.get("persistent", True),
                     "revision": r.get("revision", 1),
@@ -825,22 +829,37 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                 return
             with lock:
                 guest_token = device_key if device_key else (token or f"token_{int(time.time()*1000)}")
+                now = time.time()
+                final_name = name
+                rename_explicit = bool(data.get("rename", False))
+                if not rename_explicit:
+                    existing_active_names = {
+                        g.get("name", "").lower(): g.get("name", "")
+                        for t, g in guests.items()
+                        if t != guest_token and (now - g.get("last_seen", 0) < 30)
+                    }
+                    if final_name.lower() in existing_active_names:
+                        idx = 2
+                        while f"{name}{idx}".lower() in existing_active_names:
+                            idx += 1
+                        final_name = f"{name}{idx}"
+
                 old_name = guests.get(guest_token, {}).get("name")
                 guests[guest_token] = {
-                    "name": name,
+                    "name": final_name,
                     "deviceKey": device_key,
-                    "last_seen": time.time(),
+                    "last_seen": now,
                 }
-                if old_name and old_name != name:
+                if old_name and old_name != final_name:
                     for r in rooms.values():
                         if old_name in r.get("members", set()):
                             r["members"].discard(old_name)
-                            r["members"].add(name)
+                            r["members"].add(final_name)
                 mark_dirty()
-                print(f"[AUTH] User connected: {name} ({guest_token[:8]}...)")
+                print(f"[AUTH] User connected: {final_name} ({guest_token[:8]}...)")
                 self.send_json(200, {
                     "token": guest_token,
-                    "name": name,
+                    "name": final_name,
                 })
             return
 
@@ -856,6 +875,7 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                 rooms[room_id] = {
                     "name": name,
                     "owner": token,
+                    "owner_name": user_name,
                     "revision": 1,
                     "objects": {},
                     "tombstones": {},
@@ -1134,7 +1154,8 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                 if r is None:
                     self.send_json(404, {"error": "Комната не найдена"})
                     return
-                is_owner = r.get("owner") == token
+                user_name = guests.get(token, {}).get("name", "")
+                is_owner = (r.get("owner") == token) or (user_name != "" and user_name.lower() == r.get("owner_name", "").lower())
             if not is_owner:
                 self.send_json(403, {"error": "Восстановить комнату может только её владелец"})
                 return
