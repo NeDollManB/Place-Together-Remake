@@ -2758,7 +2758,17 @@ task.spawn(function()
 	while true do
 		task.wait(1.5)
 		if not loggedIn and not inviting and not polling then
-			pcall(guestEnter)
+			local ok, err = pcall(guestEnter)
+			if not ok then
+				local msg = tostring(err)
+				if msg:find("Timedout") or msg:find("timeout") then
+					status("Connection timed out (" .. base() .. "). Check IP in Settings tab.")
+				elseif msg:find("ConnectFail") or msg:find("10061") then
+					status("Server offline at " .. base() .. ". Check server is running.")
+				else
+					status("Connecting failed: " .. msg:gsub("^.-:%s*", ""):sub(1, 60))
+				end
+			end
 		end
 		if loggedIn and not polling and not inviting then
 			polling = true
