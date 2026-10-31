@@ -564,6 +564,12 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
         if not raw.strip():
             return {}
         parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            # Roblox HttpService:JSONEncode({}) serializes empty Lua tables as "[]".
+            # Treat an empty list as an empty object so Roblox client requests never fail.
+            if len(parsed) == 0:
+                return {}
+            raise ValueError("JSON body must be an object")
         if not isinstance(parsed, dict):
             raise ValueError("JSON body must be an object")
         return parsed

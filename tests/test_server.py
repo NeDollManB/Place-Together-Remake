@@ -313,6 +313,14 @@ class TestRequestLimits(ServerTestBase):
         finally:
             server.MAX_BODY_BYTES = limit
 
+    def test_empty_array_body_is_accepted_for_roblox_client(self):
+        # Roblox HttpService:JSONEncode({}) produces "[]", which should be treated as empty dict
+        payload = b"[]"
+        raw = self.raw(
+            b"POST /api/guest HTTP/1.1\r\nHost: x\r\nContent-Length: " + str(len(payload)).encode() + b"\r\nConnection: close\r\n\r\n" + payload
+        )
+        self.assertIn(b"200", raw.split(b"\r\n")[0])
+
 
 class TestTombstonePruning(unittest.TestCase):
     def test_pruning_never_drops_tombstones_a_peer_still_needs(self):

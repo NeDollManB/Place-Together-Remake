@@ -2532,7 +2532,7 @@ local function joinExistingRoomById(targetRoomId, targetRoomName)
 	end
 	inviting = true
 	local ok, err = pcall(function()
-		api("/rooms/"..targetRoomId.."/join", "POST", {})
+		api("/rooms/"..targetRoomId.."/join", "POST")
 		room.Text = targetRoomId
 		sessionTitle.Text = targetRoomName or "Studio Project"
 		index()
