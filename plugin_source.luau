@@ -11,9 +11,6 @@ local Editor = game:GetService("ScriptEditorService")
 local Run = game:GetService("RunService")
 local Selection = game:GetService("Selection")
 local UserInputService = game:GetService("UserInputService")
-local ChangeHistoryService = game:GetService("ChangeHistoryService")
-local Reflection = game:GetService("ReflectionService")
-local Assets = game:GetService("AssetService")
 local Collection = game:GetService("CollectionService")
 
 local roots = {
@@ -27,10 +24,6 @@ for _, name in ipairs(roots) do
 	serviceIds["@"..name] = true
 end
 
-local common = {
-	"Archivable", "TopSurface", "BottomSurface", "LeftSurface",
-	"RightSurface", "FrontSurface", "BackSurface", "MaterialVariant"
-}
 local props = {
 	"Anchored", "CanCollide", "CanTouch", "CanQuery", "Transparency",
 	"Reflectance", "Color", "Material", "Size", "CFrame", "Shape",
@@ -247,84 +240,93 @@ local function card(parent, name)
 end
 
 -- HEADER
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1, -28, 0, 46)
-header.Position = UDim2.fromOffset(14, 10)
-header.BackgroundTransparency = 1
-header.Parent = frame
+local identity
+local badgeStroke
+local dot
+local statusBadgeLabel
 
-local brand = title("PlaceTogether 3.0", header)
-brand.Size = UDim2.new(1, -100, 0, 22)
-brand.TextSize = 17
+do
+	local header = Instance.new("Frame")
+	header.Size = UDim2.new(1, -28, 0, 46)
+	header.Position = UDim2.fromOffset(14, 10)
+	header.BackgroundTransparency = 1
+	header.Parent = frame
 
-local identity = textLabel("Ultra-Smooth Co-op Engine", 16, header)
-identity.Position = UDim2.fromOffset(0, 24)
-identity.AutomaticSize = Enum.AutomaticSize.None
-identity.TextColor3 = palette.subtle
-identity.Font = Enum.Font.Gotham
-identity.TextSize = 11
+	local brand = title("PlaceTogether 3.0", header)
+	brand.Size = UDim2.new(1, -100, 0, 22)
+	brand.TextSize = 17
 
-local statusBadge = Instance.new("Frame")
-statusBadge.Size = UDim2.fromOffset(88, 26)
-statusBadge.Position = UDim2.new(1, -88, 0, 6)
-statusBadge.BackgroundColor3 = palette.tabBg
-statusBadge.BorderSizePixel = 0
-statusBadge.Parent = header
-corner(statusBadge, 13)
-local badgeStroke = stroke(statusBadge, palette.line, 1)
+	identity = textLabel("Ultra-Smooth Co-op Engine", 16, header)
+	identity.Position = UDim2.fromOffset(0, 24)
+	identity.AutomaticSize = Enum.AutomaticSize.None
+	identity.TextColor3 = palette.subtle
+	identity.Font = Enum.Font.Gotham
+	identity.TextSize = 11
 
-local dot = Instance.new("Frame")
-dot.Size = UDim2.fromOffset(7, 7)
-dot.Position = UDim2.new(0, 10, 0.5, -3)
-dot.BackgroundColor3 = palette.muted
-dot.BorderSizePixel = 0
-dot.Parent = statusBadge
-corner(dot, 8)
+	local statusBadge = Instance.new("Frame")
+	statusBadge.Size = UDim2.fromOffset(88, 26)
+	statusBadge.Position = UDim2.new(1, -88, 0, 6)
+	statusBadge.BackgroundColor3 = palette.tabBg
+	statusBadge.BorderSizePixel = 0
+	statusBadge.Parent = header
+	corner(statusBadge, 13)
+	badgeStroke = stroke(statusBadge, palette.line, 1)
 
-local statusBadgeLabel = Instance.new("TextLabel")
-statusBadgeLabel.Size = UDim2.new(1, -24, 1, 0)
-statusBadgeLabel.Position = UDim2.fromOffset(22, 0)
-statusBadgeLabel.BackgroundTransparency = 1
-statusBadgeLabel.Font = Enum.Font.GothamBold
-statusBadgeLabel.TextSize = 10
-statusBadgeLabel.TextColor3 = palette.muted
-statusBadgeLabel.TextXAlignment = Enum.TextXAlignment.Left
-statusBadgeLabel.Text = "OFFLINE"
-statusBadgeLabel.Parent = statusBadge
+	dot = Instance.new("Frame")
+	dot.Size = UDim2.fromOffset(7, 7)
+	dot.Position = UDim2.new(0, 10, 0.5, -3)
+	dot.BackgroundColor3 = palette.muted
+	dot.BorderSizePixel = 0
+	dot.Parent = statusBadge
+	corner(dot, 8)
+
+	statusBadgeLabel = Instance.new("TextLabel")
+	statusBadgeLabel.Size = UDim2.new(1, -24, 1, 0)
+	statusBadgeLabel.Position = UDim2.fromOffset(22, 0)
+	statusBadgeLabel.BackgroundTransparency = 1
+	statusBadgeLabel.Font = Enum.Font.GothamBold
+	statusBadgeLabel.TextSize = 10
+	statusBadgeLabel.TextColor3 = palette.muted
+	statusBadgeLabel.TextXAlignment = Enum.TextXAlignment.Left
+	statusBadgeLabel.Text = "OFFLINE"
+	statusBadgeLabel.Parent = statusBadge
+end
 
 -- 3-TAB BAR: Together | Saves & Rooms | Settings
-local tabsBar = Instance.new("Frame")
-tabsBar.Position = UDim2.fromOffset(14, 64)
-tabsBar.Size = UDim2.new(1, -28, 0, 32)
-tabsBar.BackgroundColor3 = palette.tabBg
-tabsBar.BorderSizePixel = 0
-tabsBar.Parent = frame
-corner(tabsBar, 8)
-stroke(tabsBar, palette.line, 1)
-pad(tabsBar, 3, 3)
-
 local tabButtons = {}
 local tabStrokes = {}
-local tabDefs = {
-	{"home", "Together"},
-	{"saves", "Saves & Rooms"},
-	{"settings", "Settings"},
-}
-for i, item in ipairs(tabDefs) do
-	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(1 / #tabDefs, -2, 1, 0)
-	b.Position = UDim2.new((i - 1) / #tabDefs, (i == 1 and 0 or 1), 0, 0)
-	b.Text = item[2]
-	b.Font = Enum.Font.GothamMedium
-	b.TextSize = 11
-	b.BorderSizePixel = 0
-	b.AutoButtonColor = true
-	b.Parent = tabsBar
-	corner(b, 6)
-	local s = stroke(b, palette.cardBorder, 1)
-	s.Enabled = false
-	tabStrokes[item[1]] = s
-	tabButtons[item[1]] = b
+do
+	local tabsBar = Instance.new("Frame")
+	tabsBar.Position = UDim2.fromOffset(14, 64)
+	tabsBar.Size = UDim2.new(1, -28, 0, 32)
+	tabsBar.BackgroundColor3 = palette.tabBg
+	tabsBar.BorderSizePixel = 0
+	tabsBar.Parent = frame
+	corner(tabsBar, 8)
+	stroke(tabsBar, palette.line, 1)
+	pad(tabsBar, 3, 3)
+
+	local tabDefs = {
+		{"home", "Together"},
+		{"saves", "Saves & Rooms"},
+		{"settings", "Settings"},
+	}
+	for i, item in ipairs(tabDefs) do
+		local b = Instance.new("TextButton")
+		b.Size = UDim2.new(1 / #tabDefs, -2, 1, 0)
+		b.Position = UDim2.new((i - 1) / #tabDefs, (i == 1 and 0 or 1), 0, 0)
+		b.Text = item[2]
+		b.Font = Enum.Font.GothamMedium
+		b.TextSize = 11
+		b.BorderSizePixel = 0
+		b.AutoButtonColor = true
+		b.Parent = tabsBar
+		corner(b, 6)
+		local s = stroke(b, palette.cardBorder, 1)
+		s.Enabled = false
+		tabStrokes[item[1]] = s
+		tabButtons[item[1]] = b
+	end
 end
 
 -- ============================================================
@@ -333,89 +335,116 @@ end
 local homePanel = container(body, "Together")
 currentParent = homePanel
 
-local nickHeader = textLabel("YOUR USERNAME (SHARE WITH FRIEND)", 14, homePanel)
-nickHeader.Font = Enum.Font.GothamBold
-nickHeader.TextSize = 10
-nickHeader.TextColor3 = palette.subtle
-
-local shareNick = field("Connecting...", "", homePanel)
-shareNick.TextEditable = false
+local shareNick
+do
+	local nickHeader = textLabel("YOUR USERNAME (SHARE WITH FRIEND)", 14, homePanel)
+	nickHeader.Font = Enum.Font.GothamBold
+	nickHeader.TextSize = 10
+	nickHeader.TextColor3 = palette.subtle
+	shareNick = field("Connecting...", "", homePanel)
+	shareNick.TextEditable = false
+end
 
 local sessionCard = card(homePanel, "Session")
-local sessionBadge = textLabel("LIVE CO-OP SESSION (60 FPS INTERPOLATION)", 14, sessionCard)
-sessionBadge.Font = Enum.Font.GothamBold
-sessionBadge.TextSize = 9
-sessionBadge.TextColor3 = palette.green
+local sessionTitle
+local sessionStats
+local participantsText
+local quickSaveBtn
+local connect
 
-local sessionTitle = title(game.Name, sessionCard)
-local sessionStats = textLabel("Rev 1 · 0 objects · Auto-save active", 18, sessionCard)
-sessionStats.TextColor3 = palette.muted
-sessionStats.TextSize = 11
+do
+	local sessionBadge = textLabel("LIVE CO-OP SESSION (60 FPS INTERPOLATION)", 14, sessionCard)
+	sessionBadge.Font = Enum.Font.GothamBold
+	sessionBadge.TextSize = 9
+	sessionBadge.TextColor3 = palette.green
 
-local participantsText = textLabel("Participants will appear once connected.", 20, sessionCard)
-participantsText.TextColor3 = palette.subtle
-participantsText.TextSize = 11
+	sessionTitle = title(game.Name, sessionCard)
+	sessionStats = textLabel("Rev 1 · 0 objects · Auto-save active", 18, sessionCard)
+	sessionStats.TextColor3 = palette.muted
+	sessionStats.TextSize = 11
 
-local quickSaveBtn = makeButton("Save & Create Backup Now", sessionCard, "success", 34)
-local connect = makeButton("Leave Session", sessionCard, "danger", 34)
-connect.Visible = false
+	participantsText = textLabel("Participants will appear once connected.", 20, sessionCard)
+	participantsText.TextColor3 = palette.subtle
+	participantsText.TextSize = 11
+
+	quickSaveBtn = makeButton("Save & Create Backup Now", sessionCard, "success", 34)
+	connect = makeButton("Leave Session", sessionCard, "danger", 34)
+	connect.Visible = false
+end
+
+-- REAL-TIME SCRIPT COLLABORATION CARD
+local scActiveLabel
+do
+	local scriptCollabCard = card(homePanel, "ScriptCollabCard")
+	local scBadge = textLabel("REAL-TIME SCRIPT CO-AUTHORING", 14, scriptCollabCard)
+	scBadge.Font = Enum.Font.GothamBold
+	scBadge.TextSize = 9
+	scBadge.TextColor3 = palette.accent
+
+	local scTitle = title("Concurrent Script Editing Active", scriptCollabCard)
+	local scDesc = textLabel("You and your peers can edit the same script at the same time! 3-way line diffing merges your code automatically without overwriting.", 28, scriptCollabCard)
+	scDesc.TextSize = 11
+	scDesc.TextColor3 = palette.muted
+
+	scActiveLabel = textLabel("Open any script in Studio to start co-editing.", 18, scriptCollabCard)
+	scActiveLabel.TextSize = 11
+	scActiveLabel.TextColor3 = palette.subtle
+end
 
 -- CO-OP TEAM TEST UI CARD
--- REAL-TIME SCRIPT COLLABORATION CARD
-local scriptCollabCard = card(homePanel, "ScriptCollabCard")
-local scBadge = textLabel("REAL-TIME SCRIPT CO-AUTHORING", 14, scriptCollabCard)
-scBadge.Font = Enum.Font.GothamBold
-scBadge.TextSize = 9
-scBadge.TextColor3 = palette.accent
+local ttActiveUsersLabel
+local toggleTeamTestBtn
+do
+	local teamTestCard = card(homePanel, "TeamTestCard")
+	local ttBadge = textLabel("CO-OP TEAM TEST (PLAYTEST MODE)", 14, teamTestCard)
+	ttBadge.Font = Enum.Font.GothamBold
+	ttBadge.TextSize = 9
+	ttBadge.TextColor3 = palette.green
 
-local scTitle = title("Concurrent Script Editing Active", scriptCollabCard)
-local scDesc = textLabel("You and your peers can edit the same script at the same time! 3-way line diffing merges your code automatically without overwriting.", 28, scriptCollabCard)
-scDesc.TextSize = 11
-scDesc.TextColor3 = palette.muted
+	local ttTitle = title("Multiplayer Playtest in Studio", teamTestCard)
+	local ttDesc = textLabel("Spawn avatars, run, jump, check parkour & collisions with friends directly in Roblox Studio without uploading to Roblox!", 28, teamTestCard)
+	ttDesc.TextSize = 11
+	ttDesc.TextColor3 = palette.muted
 
-local scActiveLabel = textLabel("Open any script in Studio to start co-editing.", 18, scriptCollabCard)
-scActiveLabel.TextSize = 11
-scActiveLabel.TextColor3 = palette.subtle
+	ttActiveUsersLabel = textLabel("No active testers in room.", 18, teamTestCard)
+	ttActiveUsersLabel.TextSize = 11
+	ttActiveUsersLabel.TextColor3 = palette.subtle
 
-local teamTestCard = card(homePanel, "TeamTestCard")
-local ttBadge = textLabel("CO-OP TEAM TEST (PLAYTEST MODE)", 14, teamTestCard)
-ttBadge.Font = Enum.Font.GothamBold
-ttBadge.TextSize = 9
-ttBadge.TextColor3 = palette.green
-
-local ttTitle = title("Multiplayer Playtest in Studio", teamTestCard)
-local ttDesc = textLabel("Spawn avatars, run, jump, check parkour & collisions with friends directly in Roblox Studio without uploading to Roblox!", 28, teamTestCard)
-ttDesc.TextSize = 11
-ttDesc.TextColor3 = palette.muted
-
-local ttActiveUsersLabel = textLabel("No active testers in room.", 18, teamTestCard)
-ttActiveUsersLabel.TextSize = 11
-ttActiveUsersLabel.TextColor3 = palette.subtle
-
-local toggleTeamTestBtn = makeButton("▶ Start Team Test", teamTestCard, "primary", 36)
+	toggleTeamTestBtn = makeButton("▶ Start Team Test", teamTestCard, "primary", 36)
+end
 
 local hostStartBtn = makeButton("Start Hosting Current Place", homePanel, "primary", 36)
 
-local inviteCard = card(homePanel, "Invite")
-local inviteHeader = title("Invite Peer", inviteCard)
-inviteHeader.TextSize = 14
+local nick
+local invite
+local inviteStatus
+do
+	local inviteCard = card(homePanel, "Invite")
+	local inviteHeader = title("Invite Peer", inviteCard)
+	inviteHeader.TextSize = 14
 
-local nick = field("Friend's username in plugin", "", inviteCard)
-local invite = makeButton("Send Invitation", inviteCard, "primary")
-local inviteStatus = textLabel("Ask your friend for their username shown in their plugin.", 24, inviteCard)
-inviteStatus.TextColor3 = palette.subtle
-inviteStatus.TextSize = 11
+	nick = field("Friend's username in plugin", "", inviteCard)
+	invite = makeButton("Send Invitation", inviteCard, "primary")
+	inviteStatus = textLabel("Ask your friend for their username shown in their plugin.", 24, inviteCard)
+	inviteStatus.TextColor3 = palette.subtle
+	inviteStatus.TextSize = 11
+end
 
 local incomingCard = card(homePanel, "Incoming")
-local incomingTitle = title("Incoming Invitation", incomingCard)
-incomingTitle.TextColor3 = palette.accent
+local incoming
+local yes
+local no
+do
+	local incomingTitle = title("Incoming Invitation", incomingCard)
+	incomingTitle.TextColor3 = palette.accent
 
-local incoming = textLabel("", 30, incomingCard)
-incoming.TextColor3 = palette.text
-local yes = makeButton("Accept in Empty Place", incomingCard, "primary")
-local no = makeButton("Decline", incomingCard)
-yes.Visible = false
-no.Visible = false
+	incoming = textLabel("", 30, incomingCard)
+	incoming.TextColor3 = palette.text
+	yes = makeButton("Accept in Empty Place", incomingCard, "primary")
+	no = makeButton("Decline", incomingCard)
+	yes.Visible = false
+	no.Visible = false
+end
 
 local retry = makeButton("Reconnect to Session", homePanel)
 retry.Visible = false
@@ -429,26 +458,34 @@ accept.Visible = false
 local savesPanel = container(body, "SavesPanel")
 currentParent = savesPanel
 
-local saveActionsCard = card(savesPanel, "SaveActionsCard")
-title("Project Persistence & Backups", saveActionsCard)
-local saveInfoText = textLabel("All changes auto-save to server disk within 2 seconds. You can also create manual checkpoints or restore any previous backup.", 32, saveActionsCard)
-saveInfoText.TextSize = 11
+local manualSnapName
+local createSnapBtn
+local refreshSavesBtn
+local roomsListContainer
+local backupsListContainer
 
-local manualSnapName = field("Checkpoint label (e.g. before_refactor)", "", saveActionsCard)
-local createSnapBtn = makeButton("Save & Create Checkpoint", saveActionsCard, "success")
-local refreshSavesBtn = makeButton("Refresh Rooms & Backups", saveActionsCard)
+do
+	local saveActionsCard = card(savesPanel, "SaveActionsCard")
+	title("Project Persistence & Backups", saveActionsCard)
+	local saveInfoText = textLabel("All changes auto-save to server disk within 2 seconds. You can also create manual checkpoints or restore any previous backup.", 32, saveActionsCard)
+	saveInfoText.TextSize = 11
 
-local roomsListCard = card(savesPanel, "RoomsListCard")
-title("Saved Rooms on Server", roomsListCard)
-local roomsListSub = textLabel("Click any saved room to resume or join it directly:", 18, roomsListCard)
-roomsListSub.TextSize = 11
-local roomsListContainer = container(roomsListCard, "RoomsItems")
+	manualSnapName = field("Checkpoint label (e.g. before_refactor)", "", saveActionsCard)
+	createSnapBtn = makeButton("Save & Create Checkpoint", saveActionsCard, "success")
+	refreshSavesBtn = makeButton("Refresh Rooms & Backups", saveActionsCard)
 
-local backupsListCard = card(savesPanel, "BackupsListCard")
-title("Room Backups (Time Machine)", backupsListCard)
-local backupsListSub = textLabel("Restore your current room to any saved checkpoint:", 18, backupsListCard)
-backupsListSub.TextSize = 11
-local backupsListContainer = container(backupsListCard, "BackupsItems")
+	local roomsListCard = card(savesPanel, "RoomsListCard")
+	title("Saved Rooms on Server", roomsListCard)
+	local roomsListSub = textLabel("Click any saved room to resume or join it directly:", 18, roomsListCard)
+	roomsListSub.TextSize = 11
+	roomsListContainer = container(roomsListCard, "RoomsItems")
+
+	local backupsListCard = card(savesPanel, "BackupsListCard")
+	title("Room Backups (Time Machine)", backupsListCard)
+	local backupsListSub = textLabel("Restore your current room to any saved checkpoint:", 18, backupsListCard)
+	backupsListSub.TextSize = 11
+	backupsListContainer = container(backupsListCard, "BackupsItems")
+end
 
 -- ============================================================
 -- SETTINGS PANEL
@@ -457,67 +494,73 @@ local settingsPanel = container(body, "Settings")
 currentParent = settingsPanel
 title("Settings")
 
-local selfNickHeader = textLabel("YOUR DISPLAY USERNAME", 14)
-selfNickHeader.Font = Enum.Font.GothamBold
-selfNickHeader.TextSize = 10
-selfNickHeader.TextColor3 = palette.subtle
-
-local selfNick = field("Username", plugin:GetSetting("PTInviteName") or "")
-local selfNickHint = textLabel("Roblox Studio username is used automatically.", 18)
-selfNickHint.TextSize = 11
-selfNickHint.TextColor3 = palette.subtle
-
-local addressHeader = textLabel("HOST SERVER ADDRESS", 14)
-addressHeader.Font = Enum.Font.GothamBold
-addressHeader.TextSize = 10
-addressHeader.TextColor3 = palette.subtle
-
-local address = field("http://127.0.0.1:8787", savedAddress)
-local addressHint = textLabel("All participants must enter the same server address.", 18)
-addressHint.TextSize = 11
-addressHint.TextColor3 = palette.subtle
+local selfNick
+local address
+local serverSecret
 
 do
+	local selfNickHeader = textLabel("YOUR DISPLAY USERNAME", 14)
+	selfNickHeader.Font = Enum.Font.GothamBold
+	selfNickHeader.TextSize = 10
+	selfNickHeader.TextColor3 = palette.subtle
+
+	selfNick = field("Username", plugin:GetSetting("PTInviteName") or "")
+	local selfNickHint = textLabel("Roblox Studio username is used automatically.", 18)
+	selfNickHint.TextSize = 11
+	selfNickHint.TextColor3 = palette.subtle
+
+	local addressHeader = textLabel("HOST SERVER ADDRESS", 14)
+	addressHeader.Font = Enum.Font.GothamBold
+	addressHeader.TextSize = 10
+	addressHeader.TextColor3 = palette.subtle
+
+	address = field("http://127.0.0.1:8787", savedAddress)
+	local addressHint = textLabel("All participants must enter the same server address.", 18)
+	addressHint.TextSize = 11
+	addressHint.TextColor3 = palette.subtle
+
 	local header = textLabel("SERVER PASSWORD (OPTIONAL)", 14)
 	header.Font = Enum.Font.GothamBold
 	header.TextSize = 10
 	header.TextColor3 = palette.subtle
-end
 
-local serverSecret = field("Leave empty if the server has no password", plugin:GetSetting("PTSecret") or "")
+	serverSecret = field("Leave empty if the server has no password", plugin:GetSetting("PTSecret") or "")
 
-do
 	local hint = textLabel("Must match --secret / PT_SECRET on the server.", 18)
 	hint.TextSize = 11
 	hint.TextColor3 = palette.subtle
+
+	serverSecret.FocusLost:Connect(function()
+		plugin:SetSetting("PTSecret", serverSecret.Text)
+	end)
+
+	local creditsCard = card(settingsPanel, "CreditsCard")
+	local credTitle = title("PlaceTogether 3.0", creditsCard)
+	credTitle.TextSize = 14
+	local credSub = textLabel("Ultra-Fast Event-Driven Co-op Fork", 16, creditsCard)
+	credSub.TextSize = 11
+	credSub.TextColor3 = palette.subtle
 end
-serverSecret.FocusLost:Connect(function()
-	plugin:SetSetting("PTSecret", serverSecret.Text)
-end)
 
 local presenceToggle = makeButton("Peer Cursors & Live Drag: On")
 local smoothToggle = makeButton("Smooth 60FPS Part Lerp: On")
 local logout = makeButton("Reconnect to Server")
 
-local creditsCard = card(settingsPanel, "CreditsCard")
-local credTitle = title("PlaceTogether 3.0", creditsCard)
-credTitle.TextSize = 14
-local credSub = textLabel("Ultra-Fast Event-Driven Co-op Fork", 16, creditsCard)
-credSub.TextSize = 11
-credSub.TextColor3 = palette.subtle
-
 -- FOOTER
-local footer = Instance.new("Frame")
-footer.Position = UDim2.new(0, 14, 1, -42)
-footer.Size = UDim2.new(1, -28, 0, 34)
-footer.BackgroundColor3 = palette.tabBg
-footer.BorderSizePixel = 0
-footer.Parent = frame
-corner(footer, 8)
-stroke(footer, palette.line, 1)
-pad(footer, 12, 0)
+local notice
+do
+	local footer = Instance.new("Frame")
+	footer.Position = UDim2.new(0, 14, 1, -42)
+	footer.Size = UDim2.new(1, -28, 0, 34)
+	footer.BackgroundColor3 = palette.tabBg
+	footer.BorderSizePixel = 0
+	footer.Parent = frame
+	corner(footer, 8)
+	stroke(footer, palette.line, 1)
+	pad(footer, 12, 0)
 
-local notice = textLabel("Connecting to server...", 34, footer)
+	notice = textLabel("Connecting to server...", 34, footer)
+end
 notice.Size = UDim2.fromScale(1, 1)
 notice.AutomaticSize = Enum.AutomaticSize.None
 notice.TextSize = 11
@@ -1214,41 +1257,39 @@ local function decode(v)
 	error("Unknown type "..tostring(t))
 end
 
-local denied = {
-	Name = true, Parent = true, ClassName = true, Source = true,
-	UniqueId = true, HistoryId = true, Capabilities = true,
-	Sandboxed = true, DefinesCapabilities = true, RobloxLocked = true,
-	Tags = true, Attributes = true, AttributesSerialize = true, AttributesReplicate = true
-}
-local physics = {
-	AssemblyLinearVelocity = true, AssemblyAngularVelocity = true,
-	Velocity = true, RotVelocity = true, ReceiveAge = true
-}
-local publicEdit = {
-	Size = true, Color = true, Shape = true, MaterialVariant = true,
-	Archivable = true, WorldPivot = true, ImageContent = true,
-	AudioContent = true, MeshContent = true, TextureContent = true,
-	ColorMapContent = true, CameraOffset = true, Health = true,
-	Axis = true, SecondaryAxis = true
-}
-local appearanceProps = {
-	"Image", "ImageContent", "ImageColor3", "ImageTransparency",
-	"ImageRectOffset", "ImageRectSize", "ScaleType", "SliceCenter",
-	"SliceScale", "TileSize", "ResampleMode", "Texture", "TextureContent",
-	"TextureID", "ColorMap", "ColorMapContent", "NormalMap", "NormalMapContent",
-	"RoughnessMap", "RoughnessMapContent", "MetalnessMap", "MetalnessMapContent",
-	"EmissiveMaskContent", "EmissiveStrength", "EmissiveTint", "AlphaMode",
-	"Color", "Transparency", "Face", "StudsPerTileU", "StudsPerTileV",
-	"OffsetStudsU", "OffsetStudsV"
-}
-local appearanceSet = {}
-for _, name in ipairs(appearanceProps) do
-	appearanceSet[name] = true
-end
-local contentAliases = {
-	Image = "ImageContent", Texture = "TextureContent",
-	ColorMap = "ColorMapContent", NormalMap = "NormalMapContent",
-	RoughnessMap = "RoughnessMapContent", MetalnessMap = "MetalnessMapContent"
+local PropRules = {
+	denied = {
+		Name = true, Parent = true, ClassName = true, Source = true,
+		UniqueId = true, HistoryId = true, Capabilities = true,
+		Sandboxed = true, DefinesCapabilities = true, RobloxLocked = true,
+		Tags = true, Attributes = true, AttributesSerialize = true, AttributesReplicate = true
+	},
+	physics = {
+		AssemblyLinearVelocity = true, AssemblyAngularVelocity = true,
+		Velocity = true, RotVelocity = true, ReceiveAge = true
+	},
+	publicEdit = {
+		Size = true, Color = true, Shape = true, MaterialVariant = true,
+		Archivable = true, WorldPivot = true, ImageContent = true,
+		AudioContent = true, MeshContent = true, TextureContent = true,
+		ColorMapContent = true, CameraOffset = true, Health = true,
+		Axis = true, SecondaryAxis = true
+	},
+	appearanceSet = {
+		Image = true, ImageContent = true, ImageColor3 = true, ImageTransparency = true,
+		ImageRectOffset = true, ImageRectSize = true, ScaleType = true, SliceCenter = true,
+		SliceScale = true, TileSize = true, ResampleMode = true, Texture = true, TextureContent = true,
+		TextureID = true, ColorMap = true, ColorMapContent = true, NormalMap = true, NormalMapContent = true,
+		RoughnessMap = true, RoughnessMapContent = true, MetalnessMap = true, MetalnessMapContent = true,
+		EmissiveMaskContent = true, EmissiveStrength = true, EmissiveTint = true, AlphaMode = true,
+		Color = true, Transparency = true, Face = true, StudsPerTileU = true, StudsPerTileV = true,
+		OffsetStudsU = true, OffsetStudsV = true
+	},
+	contentAliases = {
+		Image = "ImageContent", Texture = "TextureContent",
+		ColorMap = "ColorMapContent", NormalMap = "NormalMapContent",
+		RoughnessMap = "RoughnessMapContent", MetalnessMap = "MetalnessMapContent"
+	}
 }
 
 -- Zero-allocation property reader helper
@@ -1264,8 +1305,8 @@ local function properties(obj)
 	local list = {}
 	local seen = {}
 	local function add(name)
-		if not seen[name] and not denied[name] and not physics[name] then
-			local modern = contentAliases[name]
+		if not seen[name] and not PropRules.denied[name] and not PropRules.physics[name] then
+			local modern = PropRules.contentAliases[name]
 			if modern then
 				local readable, value = pcall(rawGetProp, obj, modern)
 				if readable and typeof(value) == "Content" then return end
@@ -1285,7 +1326,7 @@ local function properties(obj)
 	end)
 	if ok and info then
 		for _, p in ipairs(info) do
-			if (p.Serialized or publicEdit[p.Name]) and p.Permits and p.Permits.Write ~= nil then
+			if (p.Serialized or PropRules.publicEdit[p.Name]) and p.Permits and p.Permits.Write ~= nil then
 				add(p.Name)
 			end
 		end
@@ -1319,7 +1360,7 @@ local function capture(obj, key)
 			if value ~= nil then
 				p[property] = value
 			end
-			if value == nil and appearanceSet[property] then
+			if value == nil and PropRules.appearanceSet[property] then
 				warn(key..":content:"..property, obj.Name.."."..property..": local EditableImage cannot be sent as URI")
 			else
 				warnings[key..":content:"..property] = nil
@@ -1995,7 +2036,7 @@ local function apply(remote, sent, force)
 					warnings[key..":"..name] = nil
 				else
 					warn(key..":"..name, v.name.."."..name..": unavailable via API")
-					if appearanceSet[name] then
+					if PropRules.appearanceSet[name] then
 						appearanceRetry[key] = os.clock() + 10
 					end
 				end
@@ -2863,43 +2904,40 @@ end)
 -- ============================================================
 -- CO-OP TEAM TEST SUB-SYSTEM (60 FPS MULTIPLAYER PLAYTEST)
 -- ============================================================
-local teamTestActive = false
-local teamTestFolder = nil
-local localTesterChar = nil
-local localCharNickLabel = nil
-local localCharBubbleFrame = nil
-local localCharBubbleLabel = nil
+local TT = {
+	active = false,
+	folder = nil,
+	char = nil,
+	nickLabel = nil,
+	bubbleFrame = nil,
+	bubbleLabel = nil,
+	pos = Vector3.zero,
+	rot = CFrame.identity,
+	vertVel = 0,
+	grounded = true,
+	state = "Idle",
+	stepTimer = 0,
+	idleTimer = 0,
+	walkSpeed = 16,
+	camYaw = 0,
+	camPitch = 0.2,
+	camDist = 12,
+	origCamCF = nil,
+	origCamType = nil,
+	isRmbDown = false,
+	isChatFocused = false,
+	myChatBubbleText = "",
+	myChatBubbleTime = 0,
+	myUserId = 0,
+	remoteTesters = {},
+	activeTestersList = {},
+	hudGui = nil,
+	hudActiveUsersLabel = nil,
+	hudChatBox = nil,
+}
+pcall(function() TT.myUserId = game:GetService("StudioService"):GetUserId() end)
 
-local localPos = Vector3.zero
-local localCharRot = CFrame.identity
-local localVertVel = 0
-local localGrounded = true
-local localState = "Idle"
-local localStepTimer = 0
-local localIdleTimer = 0
-local localWalkSpeed = 16
-
-local camYaw = 0
-local camPitch = 0.2
-local camDist = 12
-local origCamCF = nil
-local origCamType = nil
-local isRmbDown = false
-local isChatFocused = false
-
-local myChatBubbleText = ""
-local myChatBubbleTime = 0
-local myUserId = 0
-pcall(function() myUserId = game:GetService("StudioService"):GetUserId() end)
-
-local remoteTesters = {} -- peer.id -> { model, label, bubbleFrame, bubbleLabel, pos, targetPos, rot, targetRot, state, stepTimer, idleTimer, lastChat, seen }
-local activeTestersList = {}
-
-local hudGui = nil
-local hudActiveUsersLabel = nil
-local hudChatBox = nil
-
-local function getTeamTestFolder()
+function TT.getFolder()
 	local folder = workspace:FindFirstChild("PlaceTogetherTeamTest")
 	if not folder then
 		folder = Instance.new("Folder")
@@ -2910,7 +2948,7 @@ local function getTeamTestFolder()
 	return folder
 end
 
-local function getSpawnLocation()
+function TT.getSpawn()
 	local spawns = {}
 	for _, desc in ipairs(workspace:GetDescendants()) do
 		if desc:IsA("SpawnLocation") and desc.Enabled then
@@ -2928,7 +2966,7 @@ local function getSpawnLocation()
 	return Vector3.new(0, 10, 0)
 end
 
-local function buildRobloxAvatar(name, uid, tint)
+function TT.buildAvatar(name, uid, tint)
 	local char = nil
 	if uid and uid > 0 then
 		pcall(function()
@@ -3075,7 +3113,7 @@ local function buildRobloxAvatar(name, uid, tint)
 	return char, nickL, chatFrame, chatL
 end
 
-local function animateAvatar(char, state, stepTimer, idleTimer)
+function TT.animate(char, state, stepTimer, idleTimer)
 	local root = char.PrimaryPart
 	if not root then return end
 	local rootCF = root.CFrame
@@ -3123,30 +3161,30 @@ local function animateAvatar(char, state, stepTimer, idleTimer)
 	end
 end
 
-local function stopTeamTest()
-	if not teamTestActive then return end
-	teamTestActive = false
+function TT.stop()
+	if not TT.active then return end
+	TT.active = false
 
-	if localTesterChar then
-		localTesterChar:Destroy()
-		localTesterChar = nil
+	if TT.char then
+		TT.char:Destroy()
+		TT.char = nil
 	end
-	if hudGui then
-		hudGui:Destroy()
-		hudGui = nil
-		hudActiveUsersLabel = nil
-		hudChatBox = nil
+	if TT.hudGui then
+		TT.hudGui:Destroy()
+		TT.hudGui = nil
+		TT.hudActiveUsersLabel = nil
+		TT.hudChatBox = nil
 	end
 
-	for id, t in pairs(remoteTesters) do
+	for id, t in pairs(TT.remoteTesters) do
 		if t.model then t.model:Destroy() end
-		remoteTesters[id] = nil
+		TT.remoteTesters[id] = nil
 	end
 
 	pcall(function()
 		workspace.CurrentCamera.CameraType = Enum.CameraType.Fixed
-		if origCamCF then
-			workspace.CurrentCamera.CFrame = origCamCF
+		if TT.origCamCF then
+			workspace.CurrentCamera.CFrame = TT.origCamCF
 		end
 		task.wait(0.02)
 		workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
@@ -3158,51 +3196,51 @@ local function stopTeamTest()
 	status("Team Test ended. Back in Studio edit mode.")
 end
 
-local function broadcastChatMessage(text)
+function TT.broadcastChat(text)
 	text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
 	if #text == 0 then return end
-	myChatBubbleText = text
-	myChatBubbleTime = os.clock() + 6.0
-	if localCharBubbleFrame and localCharBubbleLabel then
-		localCharBubbleLabel.Text = text
-		localCharBubbleFrame.Visible = true
+	TT.myChatBubbleText = text
+	TT.myChatBubbleTime = os.clock() + 6.0
+	if TT.bubbleFrame and TT.bubbleLabel then
+		TT.bubbleLabel.Text = text
+		TT.bubbleFrame.Visible = true
 	end
 end
 
-local function startTeamTest()
+function TT.start()
 	if not active then
 		status("Connect to a session first before starting Team Test.")
 		return
 	end
-	if teamTestActive then
-		stopTeamTest()
+	if TT.active then
+		TT.stop()
 		return
 	end
 
-	teamTestFolder = getTeamTestFolder()
-	origCamCF = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or nil
-	origCamType = workspace.CurrentCamera and workspace.CurrentCamera.CameraType or nil
+	TT.folder = TT.getFolder()
+	TT.origCamCF = workspace.CurrentCamera and workspace.CurrentCamera.CFrame or nil
+	TT.origCamType = workspace.CurrentCamera and workspace.CurrentCamera.CameraType or nil
 
-	local spawnPos = getSpawnLocation()
-	localPos = spawnPos
-	localVertVel = 0
-	localGrounded = true
-	localState = "Idle"
-	localStepTimer = 0
-	localIdleTimer = 0
-	camYaw = 0
-	camPitch = 0.2
-	camDist = 12
+	local spawnPos = TT.getSpawn()
+	TT.pos = spawnPos
+	TT.vertVel = 0
+	TT.grounded = true
+	TT.state = "Idle"
+	TT.stepTimer = 0
+	TT.idleTimer = 0
+	TT.camYaw = 0
+	TT.camPitch = 0.2
+	TT.camDist = 12
 
 	local uid = 0
 	pcall(function() uid = game:GetService("StudioService"):GetUserId() end)
-	local char, nickL, bFrame, bLabel = buildRobloxAvatar(selfNick.Text, uid, palette.green)
-	char.Parent = teamTestFolder
+	local char, nickL, bFrame, bLabel = TT.buildAvatar(selfNick.Text, uid, palette.green)
+	char.Parent = TT.folder
 	char:PivotTo(CFrame.new(spawnPos))
-	localTesterChar = char
-	localCharNickLabel = nickL
-	localCharBubbleFrame = bFrame
-	localCharBubbleLabel = bLabel
+	TT.char = char
+	TT.nickLabel = nickL
+	TT.bubbleFrame = bFrame
+	TT.bubbleLabel = bLabel
 
 	nickL.Text = selfNick.Text .. " (You)"
 	nickL.TextColor3 = palette.green
@@ -3212,7 +3250,7 @@ local function startTeamTest()
 	end)
 
 	-- Create HUD
-	if hudGui then hudGui:Destroy() end
+	if TT.hudGui then TT.hudGui:Destroy() end
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "PlaceTogetherTeamTestHUD"
 	gui.ResetOnSpawn = false
@@ -3258,7 +3296,7 @@ local function startTeamTest()
 	actL.TextXAlignment = Enum.TextXAlignment.Left
 	actL.Text = "👥 You"
 	actL.Parent = topBar
-	hudActiveUsersLabel = actL
+	TT.hudActiveUsersLabel = actL
 
 	local respawnBtn = Instance.new("TextButton")
 	respawnBtn.Size = UDim2.fromOffset(76, 26)
@@ -3272,10 +3310,10 @@ local function startTeamTest()
 	respawnBtn.Parent = topBar
 	corner(respawnBtn, 6)
 	respawnBtn.MouseButton1Click:Connect(function()
-		localPos = getSpawnLocation()
-		localVertVel = 0
-		localGrounded = true
-		if localTesterChar then localTesterChar:PivotTo(CFrame.new(localPos)) end
+		TT.pos = TT.getSpawn()
+		TT.vertVel = 0
+		TT.grounded = true
+		if TT.char then TT.char:PivotTo(CFrame.new(TT.pos)) end
 		status("Respawned at spawn location.")
 	end)
 
@@ -3291,7 +3329,7 @@ local function startTeamTest()
 	exitBtn.Parent = topBar
 	corner(exitBtn, 6)
 	stroke(exitBtn, palette.dangerBorder, 1)
-	exitBtn.MouseButton1Click:Connect(stopTeamTest)
+	exitBtn.MouseButton1Click:Connect(TT.stop)
 
 	local hintL = Instance.new("TextLabel")
 	hintL.Size = UDim2.new(0, 560, 0, 22)
@@ -3326,7 +3364,7 @@ local function startTeamTest()
 	chatBox.TextXAlignment = Enum.TextXAlignment.Left
 	chatBox.ClearTextOnFocus = false
 	chatBox.Parent = chatBar
-	hudChatBox = chatBox
+	TT.hudChatBox = chatBox
 
 	local sendBtn = Instance.new("TextButton")
 	sendBtn.Size = UDim2.fromOffset(40, 26)
@@ -3343,23 +3381,23 @@ local function startTeamTest()
 	local function doSend()
 		local txt = chatBox.Text
 		if #txt:gsub("%s+", "") > 0 then
-			broadcastChatMessage(txt)
+			TT.broadcastChat(txt)
 			chatBox.Text = ""
-			isChatFocused = false
+			TT.isChatFocused = false
 		end
 	end
 
 	sendBtn.MouseButton1Click:Connect(doSend)
 	chatBox.FocusLost:Connect(function(enterPressed)
-		isChatFocused = false
+		TT.isChatFocused = false
 		if enterPressed then doSend() end
 	end)
 	chatBox.Focused:Connect(function()
-		isChatFocused = true
+		TT.isChatFocused = true
 	end)
 
-	hudGui = gui
-	teamTestActive = true
+	TT.hudGui = gui
+	TT.active = true
 
 	toggleTeamTestBtn.Text = "⏹ Exit Team Test"
 	toggleTeamTestBtn.TextColor3 = Color3.fromRGB(252, 165, 165)
@@ -3367,61 +3405,61 @@ local function startTeamTest()
 	status("Team Test active! Run, jump and test your game with peers.")
 end
 
-local function toggleTeamTest()
-	if teamTestActive then
-		stopTeamTest()
+function TT.toggle()
+	if TT.active then
+		TT.stop()
 	else
-		startTeamTest()
+		TT.start()
 	end
 end
 
-toggleTeamTestBtn.MouseButton1Click:Connect(toggleTeamTest)
-teamTestToolbarBtn.Click:Connect(toggleTeamTest)
+toggleTeamTestBtn.MouseButton1Click:Connect(TT.toggle)
+teamTestToolbarBtn.Click:Connect(TT.toggle)
 
 UserInputService.InputBegan:Connect(function(input, processed)
-	if not teamTestActive then return end
+	if not TT.active then return end
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
-		isRmbDown = true
+		TT.isRmbDown = true
 	end
-	if not isChatFocused and input.KeyCode == Enum.KeyCode.Slash then
-		if hudChatBox then
-			task.defer(function() hudChatBox:CaptureFocus() end)
+	if not TT.isChatFocused and input.KeyCode == Enum.KeyCode.Slash then
+		if TT.hudChatBox then
+			task.defer(function() TT.hudChatBox:CaptureFocus() end)
 		end
 	end
 	if input.KeyCode == Enum.KeyCode.Escape then
-		stopTeamTest()
+		TT.stop()
 	end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton2 then
-		isRmbDown = false
+		TT.isRmbDown = false
 	end
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-	if not teamTestActive then return end
-	if isRmbDown and input.UserInputType == Enum.UserInputType.MouseMovement then
-		camYaw = camYaw - input.Delta.X * 0.005
-		camPitch = math.clamp(camPitch - input.Delta.Y * 0.005, -1.2, 1.2)
+	if not TT.active then return end
+	if TT.isRmbDown and input.UserInputType == Enum.UserInputType.MouseMovement then
+		TT.camYaw = TT.camYaw - input.Delta.X * 0.005
+		TT.camPitch = math.clamp(TT.camPitch - input.Delta.Y * 0.005, -1.2, 1.2)
 	end
 	if input.UserInputType == Enum.UserInputType.MouseWheel then
-		camDist = math.clamp(camDist - input.Position.Z * 1.5, 4, 32)
+		TT.camDist = math.clamp(TT.camDist - input.Position.Z * 1.5, 4, 32)
 	end
 end)
 
-local function updateLocalTester(dt)
-	if not teamTestActive or not localTesterChar or not localTesterChar.PrimaryPart then return end
+function TT.updateLocal(dt)
+	if not TT.active or not TT.char or not TT.char.PrimaryPart then return end
 
-	local isW = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up))
-	local isS = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down))
-	local isA = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left))
-	local isD = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right))
-	local isSpace = (not isChatFocused) and UserInputService:IsKeyDown(Enum.KeyCode.Space)
-	local isShift = (not isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift))
+	local isW = (not TT.isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up))
+	local isS = (not TT.isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down))
+	local isA = (not TT.isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left))
+	local isD = (not TT.isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right))
+	local isSpace = (not TT.isChatFocused) and UserInputService:IsKeyDown(Enum.KeyCode.Space)
+	local isShift = (not TT.isChatFocused) and (UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift))
 
-	local forward = Vector3.new(math.sin(camYaw), 0, -math.cos(camYaw))
-	local right = Vector3.new(math.cos(camYaw), 0, math.sin(camYaw))
+	local forward = Vector3.new(math.sin(TT.camYaw), 0, -math.cos(TT.camYaw))
+	local right = Vector3.new(math.cos(TT.camYaw), 0, math.sin(TT.camYaw))
 	local moveDir = Vector3.zero
 	if isW then moveDir = moveDir + forward end
 	if isS then moveDir = moveDir - forward end
@@ -3431,20 +3469,20 @@ local function updateLocalTester(dt)
 	local isMoving = moveDir.Magnitude > 0.05
 	if isMoving then moveDir = moveDir.Unit end
 
-	localWalkSpeed = isShift and 26 or 16
-	local deltaMove = moveDir * (localWalkSpeed * dt)
+	TT.walkSpeed = isShift and 26 or 16
+	local deltaMove = moveDir * (TT.walkSpeed * dt)
 
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
-	rayParams.FilterDescendantsInstances = {getTeamTestFolder(), workspace.CurrentCamera}
+	rayParams.FilterDescendantsInstances = {TT.getFolder(), workspace.CurrentCamera}
 
 	-- Wall collision & step-up
 	if isMoving and deltaMove.Magnitude > 0.001 then
-		local wallCheck = workspace:Raycast(localPos + Vector3.new(0, 0.5, 0), deltaMove.Unit * (deltaMove.Magnitude + 1.2), rayParams)
+		local wallCheck = workspace:Raycast(TT.pos + Vector3.new(0, 0.5, 0), deltaMove.Unit * (deltaMove.Magnitude + 1.2), rayParams)
 		if wallCheck then
-			local stepCheck = workspace:Raycast(localPos + Vector3.new(0, 1.4, 0), deltaMove.Unit * (deltaMove.Magnitude + 1.2), rayParams)
+			local stepCheck = workspace:Raycast(TT.pos + Vector3.new(0, 1.4, 0), deltaMove.Unit * (deltaMove.Magnitude + 1.2), rayParams)
 			if not stepCheck then
-				localPos = localPos + Vector3.new(0, 1.2, 0)
+				TT.pos = TT.pos + Vector3.new(0, 1.2, 0)
 			else
 				local n = wallCheck.Normal
 				deltaMove = deltaMove - n * deltaMove:Dot(n)
@@ -3452,72 +3490,72 @@ local function updateLocalTester(dt)
 		end
 	end
 
-	localPos = localPos + deltaMove
+	TT.pos = TT.pos + deltaMove
 
 	-- Floor & gravity check
-	local floorRay = workspace:Raycast(localPos + Vector3.new(0, 1.2, 0), Vector3.new(0, -4.5, 0), rayParams)
+	local floorRay = workspace:Raycast(TT.pos + Vector3.new(0, 1.2, 0), Vector3.new(0, -4.5, 0), rayParams)
 	if floorRay then
 		local floorY = floorRay.Position.Y + 2.7
-		if localPos.Y <= floorY + 0.35 and localVertVel <= 0 then
-			localPos = Vector3.new(localPos.X, floorY, localPos.Z)
-			localVertVel = 0
-			localGrounded = true
+		if TT.pos.Y <= floorY + 0.35 and TT.vertVel <= 0 then
+			TT.pos = Vector3.new(TT.pos.X, floorY, TT.pos.Z)
+			TT.vertVel = 0
+			TT.grounded = true
 		else
-			localVertVel = localVertVel - 90 * dt
-			localPos = localPos + Vector3.new(0, localVertVel * dt, 0)
-			localGrounded = false
+			TT.vertVel = TT.vertVel - 90 * dt
+			TT.pos = TT.pos + Vector3.new(0, TT.vertVel * dt, 0)
+			TT.grounded = false
 		end
 	else
-		localVertVel = localVertVel - 90 * dt
-		localPos = localPos + Vector3.new(0, localVertVel * dt, 0)
-		localGrounded = false
+		TT.vertVel = TT.vertVel - 90 * dt
+		TT.pos = TT.pos + Vector3.new(0, TT.vertVel * dt, 0)
+		TT.grounded = false
 	end
 
 	-- Jump
-	if isSpace and localGrounded then
-		localVertVel = 38
-		localGrounded = false
+	if isSpace and TT.grounded then
+		TT.vertVel = 38
+		TT.grounded = false
 	end
 
 	-- Void respawn
-	if localPos.Y < -250 then
-		localPos = getSpawnLocation()
-		localVertVel = 0
-		localGrounded = true
+	if TT.pos.Y < -250 then
+		TT.pos = TT.getSpawn()
+		TT.vertVel = 0
+		TT.grounded = true
 		status("Fell into the void. Respawned!")
 	end
 
 	-- Rotation
 	if isMoving then
 		local targetLook = Vector3.new(deltaMove.X, 0, deltaMove.Z).Unit
-		localCharRot = localCharRot:Lerp(CFrame.lookAt(Vector3.zero, targetLook), 0.25)
+		TT.rot = TT.rot:Lerp(CFrame.lookAt(Vector3.zero, targetLook), 0.25)
 	end
 
-	local rootCF = CFrame.new(localPos) * (localCharRot - localCharRot.Position)
-	localTesterChar:PivotTo(rootCF)
+	local rootCF = CFrame.new(TT.pos) * (TT.rot - TT.rot.Position)
+	TT.char:PivotTo(rootCF)
 
 	-- State
-	if not localGrounded then
-		localState = (localVertVel > 0) and "Jumping" or "Freefall"
+	if not TT.grounded then
+		TT.state = (TT.vertVel > 0) and "Jumping" or "Freefall"
 	elseif isMoving then
-		localState = isShift and "Running" or "Walking"
-		localStepTimer = localStepTimer + dt * (localWalkSpeed * 0.7)
+		TT.state = isShift and "Running" or "Walking"
+		TT.stepTimer = TT.stepTimer + dt * (TT.walkSpeed * 0.7)
 	else
-		localState = "Idle"
-		localIdleTimer = localIdleTimer + dt
+		TT.state = "Idle"
+		TT.idleTimer = TT.idleTimer + dt
 	end
 
-	animateAvatar(localTesterChar, localState, localStepTimer, localIdleTimer)
+	TT.animate(TT.char, TT.state, TT.stepTimer, TT.idleTimer)
 
 	-- Chat bubble expiration
-	if localCharBubbleFrame then
-		localCharBubbleFrame.Visible = (os.clock() < myChatBubbleTime)
+	if TT.bubbleFrame then
+		TT.bubbleFrame.Visible = (os.clock() < TT.myChatBubbleTime)
 	end
 
 	-- Camera
-	local camFocus = localPos + Vector3.new(0, 1.8, 0)
-	local camRot = CFrame.Angles(0, camYaw, 0) * CFrame.Angles(camPitch, 0, 0)
-	local desiredCamPos = camFocus - (camRot.LookVector * camDist)
+	local camFocus = TT.pos + Vector3.new(0, 1.8, 0)
+	local camRot = CFrame.Angles(0, TT.camYaw, 0) * CFrame.Angles(TT.camPitch, 0, 0)
+	local desiredCamPos = camFocus - (camRot.LookVector * TT.camDist)
 	local occ = workspace:Raycast(camFocus, desiredCamPos - camFocus, rayParams)
 	if occ then
 		desiredCamPos = occ.Position + occ.Normal * 0.4
@@ -3525,21 +3563,21 @@ local function updateLocalTester(dt)
 	workspace.CurrentCamera.CFrame = CFrame.lookAt(desiredCamPos, camFocus)
 end
 
-local function updateRemoteTester(peer, dt)
+function TT.updateRemote(peer, dt)
 	local tt = peer.teamTest
 	if not tt or not tt.active or not tt.pos then
-		if remoteTesters[peer.id] then
-			if remoteTesters[peer.id].model then remoteTesters[peer.id].model:Destroy() end
-			remoteTesters[peer.id] = nil
+		if TT.remoteTesters[peer.id] then
+			if TT.remoteTesters[peer.id].model then TT.remoteTesters[peer.id].model:Destroy() end
+			TT.remoteTesters[peer.id] = nil
 		end
 		return
 	end
 
-	local item = remoteTesters[peer.id]
+	local item = TT.remoteTesters[peer.id]
 	if not item then
-		local folder = getTeamTestFolder()
+		local folder = TT.getFolder()
 		local tint = Color3.fromHSV(peer.hue or 0.6, 0.7, 1)
-		local char, nickL, bFrame, bLabel = buildRobloxAvatar(peer.name, tt.userId or 0, tint)
+		local char, nickL, bFrame, bLabel = TT.buildAvatar(peer.name, tt.userId or 0, tint)
 		char.Parent = folder
 		item = {
 			model = char,
@@ -3556,7 +3594,7 @@ local function updateRemoteTester(peer, dt)
 			lastChat = "",
 			seen = os.clock(),
 		}
-		remoteTesters[peer.id] = item
+		TT.remoteTesters[peer.id] = item
 	end
 
 	item.seen = os.clock()
@@ -3581,7 +3619,7 @@ local function updateRemoteTester(peer, dt)
 		item.idleTimer = item.idleTimer + dt
 	end
 
-	animateAvatar(item.model, item.state, item.stepTimer, item.idleTimer)
+	TT.animate(item.model, item.state, item.stepTimer, item.idleTimer)
 
 	if tt.chat and tt.chat ~= "" and tt.chatTime and (os.clock() < tt.chatTime) then
 		item.bubbleLabel.Text = tt.chat
@@ -3731,17 +3769,17 @@ do
 		for _, peer in ipairs(peers) do
 			if peer.teamTest and peer.teamTest.active then
 				table.insert(testers, peer.name)
-				updateRemoteTester(peer, 0.016)
+				TT.updateRemote(peer, 0.016)
 			else
-				if remoteTesters[peer.id] then
-					if remoteTesters[peer.id].model then remoteTesters[peer.id].model:Destroy() end
-					remoteTesters[peer.id] = nil
+				if TT.remoteTesters[peer.id] then
+					if TT.remoteTesters[peer.id].model then TT.remoteTesters[peer.id].model:Destroy() end
+					TT.remoteTesters[peer.id] = nil
 				end
 			end
 		end
-		activeTestersList = testers
+		TT.activeTestersList = testers
 		local allTesters = {}
-		if teamTestActive then table.insert(allTesters, selfNick.Text .. " (You)") end
+		if TT.active then table.insert(allTesters, selfNick.Text .. " (You)") end
 		for _, tName in ipairs(testers) do table.insert(allTesters, tName) end
 
 		ttActiveUsersLabel.Text = #allTesters > 0 and ("👥 Active testers: " .. table.concat(allTesters, ", ")) or "No active testers in room."
@@ -3772,11 +3810,11 @@ do
 			scActiveLabel.Text = "Open any script in Studio to start co-editing."
 			scActiveLabel.TextColor3 = palette.subtle
 		end
-		if hudActiveUsersLabel then
-			hudActiveUsersLabel.Text = "👥 " .. table.concat(allTesters, ", ")
+		if TT.hudActiveUsersLabel then
+			TT.hudActiveUsersLabel.Text = "👥 " .. table.concat(allTesters, ", ")
 		end
 
-		if teamTestActive then
+		if TT.active then
 			toggleTeamTestBtn.Text = "⏹ Exit Team Test"
 			toggleTeamTestBtn.TextColor3 = Color3.fromRGB(252, 165, 165)
 			toggleTeamTestBtn.BackgroundColor3 = palette.dangerBg
@@ -3816,17 +3854,17 @@ do
 			end
 		end
 		local teamTestData = nil
-		if teamTestActive and localTesterChar and localTesterChar.PrimaryPart then
-			local p = localTesterChar.PrimaryPart.Position
-			local lv = localTesterChar.PrimaryPart.CFrame.LookVector
+		if TT.active and TT.char and TT.char.PrimaryPart then
+			local p = TT.char.PrimaryPart.Position
+			local lv = TT.char.PrimaryPart.CFrame.LookVector
 			teamTestData = {
 				active = true,
 				pos = {p.X, p.Y, p.Z},
 				look = {lv.X, lv.Y, lv.Z},
-				state = localState,
-				chat = myChatBubbleText,
-				chatTime = myChatBubbleTime,
-				userId = myUserId or 0,
+				state = TT.state,
+				chat = TT.myChatBubbleText,
+				chatTime = TT.myChatBubbleTime,
+				userId = TT.myUserId or 0,
 			}
 		else
 			teamTestData = { active = false }
@@ -3854,12 +3892,12 @@ do
 		if not active or Run:IsRunning() then
 			if folder then clear() end
 			smoothTargets = {}
-			if teamTestActive then stopTeamTest() end
+			if TT.active then TT.stop() end
 			return
 		end
 
-		if teamTestActive then
-			updateLocalTester(dt)
+		if TT.active then
+			TT.updateLocal(dt)
 		end
 
 		-- 1. 60 FPS Smooth Object Transform Interpolation

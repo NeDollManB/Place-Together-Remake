@@ -12,3 +12,4 @@ data.json.bak
 data.json.tmp
 backups/
 tests/.tmp/
+*.zip
