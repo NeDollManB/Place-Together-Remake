@@ -20,6 +20,7 @@ import os
 import json
 import time
 import hmac
+import gzip
 import shutil
 import signal
 import atexit
@@ -139,6 +140,7 @@ def serialize_room(r):
         "persistent": r.get("persistent", True),
         "closed": r.get("closed", False),
         "members": list(r.get("members", [])),
+        "chat": list(r.get("chat", []))[-100:],
         "last_saved": r.get("last_saved", time.time()),
         "updated_at": r.get("updated_at", time.time()),
     }
@@ -175,6 +177,20 @@ def prune_tombstones(r):
     }
 
 
+def analyze_diff_lines(base_lines, mod_lines):
+    n = len(base_lines)
+    inserts = {i: [] for i in range(n + 1)}
+    state = ["deleted"] * n
+    sm = difflib.SequenceMatcher(None, base_lines, mod_lines)
+    for tag, b1, b2, m1, m2 in sm.get_opcodes():
+        if tag == "equal":
+            for i in range(b1, b2):
+                state[i] = "equal"
+        elif tag in ("insert", "replace"):
+            inserts[b1].extend(mod_lines[m1:m2])
+    return inserts, state
+
+
 def merge_3way_text(base_str, text_a, text_b):
     if text_a == text_b:
         return text_a
@@ -186,18 +202,49 @@ def merge_3way_text(base_str, text_a, text_b):
     lines_a = text_a.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     lines_b = text_b.replace("\r\n", "\n").replace("\r", "\n").split("\n")
 
-    matcher = difflib.SequenceMatcher(None, lines_a, lines_b)
+    if not base_str:
+        matcher = difflib.SequenceMatcher(None, lines_a, lines_b)
+        res = []
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                res.extend(lines_a[i1:i2])
+            elif tag == "replace":
+                res.extend(lines_a[i1:i2])
+                res.extend(lines_b[j1:j2])
+            elif tag == "delete":
+                res.extend(lines_a[i1:i2])
+            elif tag == "insert":
+                res.extend(lines_b[j1:j2])
+        return "\n".join(res)
+
+    lines_base = base_str.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines_a == lines_base:
+        return text_b
+    if lines_b == lines_base:
+        return text_a
+
+    ins_a, st_a = analyze_diff_lines(lines_base, lines_a)
+    ins_b, st_b = analyze_diff_lines(lines_base, lines_b)
+    n = len(lines_base)
     res = []
-    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-        if tag == "equal":
-            res.extend(lines_a[i1:i2])
-        elif tag == "replace":
-            res.extend(lines_a[i1:i2])
-            res.extend(lines_b[j1:j2])
-        elif tag == "delete":
-            res.extend(lines_a[i1:i2])
-        elif tag == "insert":
-            res.extend(lines_b[j1:j2])
+    for i in range(n + 1):
+        in_a = ins_a[i]
+        in_b = ins_b[i]
+        if in_a and not in_b:
+            res.extend(in_a)
+        elif in_b and not in_a:
+            res.extend(in_b)
+        elif in_a and in_b:
+            if in_a == in_b:
+                res.extend(in_a)
+            else:
+                res.extend(in_a)
+                res.extend(in_b)
+        if i < n:
+            if st_a[i] == "deleted" or st_b[i] == "deleted":
+                pass
+            else:
+                res.append(lines_base[i])
     return "\n".join(res)
 
 
@@ -449,6 +496,7 @@ def load_data(filepath):
                 "persistent": r.get("persistent", True),
                 "closed": r.get("closed", False),
                 "members": set(r.get("members", [])),
+                "chat": list(r.get("chat", [])),
                 "last_saved": r.get("last_saved", now),
                 "updated_at": r.get("updated_at", now),
             }
@@ -499,7 +547,15 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
         try:
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
+            accept_encoding = self.headers.get("Accept-Encoding", "")
+            if "gzip" in accept_encoding and len(body) > 1024:
+                compressed = gzip.compress(body, compresslevel=6)
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Content-Length", str(len(compressed)))
+                out_body = compressed
+            else:
+                self.send_header("Content-Length", str(len(body)))
+                out_body = body
             # Cross-origin access is opt-in: a wildcard CORS policy let any web
             # page in the user's browser drive this API (CSRF on 127.0.0.1).
             if cors_origin:
@@ -511,7 +567,7 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
             # reused: answering keep-alive there desynchronises the next request.
             self.send_header("Connection", "close" if self.close_connection else "keep-alive")
             self.end_headers()
-            self.wfile.write(body)
+            self.wfile.write(out_body)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
 
@@ -599,6 +655,167 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                 deltas[obj_id] = {"version": tomb["version"], "value": None}
         return deltas
 
+    def send_dashboard_html(self):
+        with lock:
+            now = time.time()
+            uptime_sec = int(now - server_start_time)
+            h = uptime_sec // 3600
+            m = (uptime_sec % 3600) // 60
+            s = uptime_sec % 60
+            uptime_str = f"{h}h {m}m {s}s"
+            rooms_list = []
+            total_objs = 0
+            for r_id, r in rooms.items():
+                obj_count = len(r.get("objects", {}))
+                total_objs += obj_count
+                peers = [p.get("name", "Peer") for p in r.get("presence", {}).values() if now - p.get("time", 0) < 15]
+                rooms_list.append({
+                    "id": r_id,
+                    "name": r.get("name", "Studio Project"),
+                    "revision": r.get("revision", 1),
+                    "objects": obj_count,
+                    "peers": peers,
+                    "owner": r.get("owner_name", "Host"),
+                })
+            guests_list = [
+                {"name": g.get("name", "Guest"), "token": t[:10] + "...", "active": (now - g.get("last_seen", 0) < 30)}
+                for t, g in guests.items()
+            ]
+
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlaceTogether 3.0 Live Dashboard</title>
+<style>
+  :root {{
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #2ea043;
+    --red: #f85149;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }}
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ background: var(--bg); color: var(--text); font-family: var(--font); padding: 24px; line-height: 1.5; }}
+  .container {{ max-width: 1080px; margin: 0 auto; }}
+  .header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }}
+  .title-group {{ display: flex; align-items: center; gap: 12px; }}
+  h1 {{ font-size: 24px; font-weight: 600; }}
+  .badge {{ background: rgba(46, 160, 67, 0.15); color: var(--green); border: 1px solid rgba(46, 160, 67, 0.4); border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }}
+  .badge .dot {{ width: 8px; height: 8px; background: var(--green); border-radius: 50%; box-shadow: 0 0 8px var(--green); }}
+  .stats-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 28px; }}
+  .stat-card {{ background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }}
+  .stat-label {{ font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }}
+  .stat-value {{ font-size: 26px; font-weight: 700; color: var(--text); }}
+  .section {{ background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; margin-bottom: 24px; }}
+  .section-header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }}
+  h2 {{ font-size: 16px; font-weight: 600; color: var(--text); }}
+  table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }}
+  th {{ color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; padding: 10px 12px; border-bottom: 1px solid var(--border); }}
+  td {{ padding: 12px; border-bottom: 1px solid rgba(48, 54, 61, 0.5); }}
+  tr:last-child td {{ border-bottom: none; }}
+  .peer-pill {{ display: inline-block; background: rgba(88, 166, 255, 0.15); color: var(--accent); border: 1px solid rgba(88, 166, 255, 0.3); border-radius: 12px; padding: 2px 10px; font-size: 12px; margin-right: 6px; }}
+  .btn {{ background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 500; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }}
+  .btn:hover {{ background: #30363d; border-color: #8b949e; }}
+  .empty-state {{ color: var(--muted); font-style: italic; padding: 20px 0; text-align: center; }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="title-group">
+      <h1>PlaceTogether 3.0</h1>
+      <span class="badge"><span class="dot"></span> ONLINE</span>
+    </div>
+    <div style="font-size: 13px; color: var(--muted);">Password: <strong>{"Enabled" if auth_secret else "None"}</strong></div>
+  </div>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Active Rooms</div>
+      <div class="stat-value">{len(rooms_list)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Synchronized Objects</div>
+      <div class="stat-value">{total_objs:,}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Connected Guests</div>
+      <div class="stat-value">{len(guests_list)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Server Uptime</div>
+      <div class="stat-value">{uptime_str}</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <h2>Collaborative Rooms</h2>
+    </div>
+    {f'''<table>
+      <thead>
+        <tr>
+          <th>Room Name</th>
+          <th>Room ID</th>
+          <th>Revision</th>
+          <th>Objects</th>
+          <th>Active Peers</th>
+          <th>Export</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(f"""<tr>
+          <td><strong>{r['name']}</strong><br><span style="color:var(--muted);font-size:12px">Host: {r['owner']}</span></td>
+          <td><code>{r['id']}</code></td>
+          <td><span style="color:var(--green)">rev {r['revision']}</span></td>
+          <td>{r['objects']:,}</td>
+          <td>{''.join(f'<span class="peer-pill">{p}</span>' for p in r['peers']) if r['peers'] else '<span style="color:var(--muted)">Idle</span>'}</td>
+          <td><a class="btn" href="/api/rooms/{r['id']}/export" download>📥 Download JSON</a></td>
+        </tr>""" for r in rooms_list)}
+      </tbody>
+    </table>''' if rooms_list else '<div class="empty-state">No active rooms yet. Click "Start Hosting Current Place" in the Roblox Studio plugin to create a room.</div>'}
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <h2>Recent Guests & Peers</h2>
+    </div>
+    {f'''<table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Token</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {''.join(f"""<tr>
+          <td><strong>{g['name']}</strong></td>
+          <td><code>{g['token']}</code></td>
+          <td>{'<span class="badge" style="padding:2px 8px;font-size:11px"><span class="dot"></span> Online</span>' if g['active'] else '<span style="color:var(--muted);font-size:12px">Idle</span>'}</td>
+        </tr>""" for g in guests_list)}
+      </tbody>
+    </table>''' if guests_list else '<div class="empty-state">No guests registered. Connect via the Roblox Studio PlaceTogether plugin.</div>'}
+  </div>
+</div>
+<script>
+  setTimeout(() => location.reload(), 4000);
+</script>
+</body>
+</html>"""
+        content = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
     def do_GET(self):
         path = self.path.split("?")[0]
         query_string = self.path.split("?")[1] if "?" in self.path else ""
@@ -612,14 +829,19 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
         token = self.get_token()
 
         # 1. Health / Status check (public on purpose, contains no user data)
+        # If opened in a web browser (Accept: text/html), serve the interactive Live Web Dashboard!
         if path == "/api/status" or path == "/":
+            accept = self.headers.get("Accept", "")
+            if path == "/" and "text/html" in accept:
+                self.send_dashboard_html()
+                return
             if not self.secret_ok():
                 self.send_json(401, {"error": "Неверный пароль сервера"})
                 return
             with lock:
                 self.send_json(200, {
                     "server": "PlaceTogether-UltraFast",
-                    "version": "3.0.0",
+                    "version": "3.2.0",
                     "status": "online",
                     "uptime": int(time.time() - server_start_time),
                     "rooms_count": len(rooms),
@@ -801,6 +1023,52 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                 self.send_json(200, my_invites)
             return
 
+        # 8. Room Snapshot Export: /api/rooms/<id>/export
+        if path.startswith("/api/rooms/") and path.endswith("/export"):
+            parts = path.split("/")
+            room_id = parts[3]
+            with lock:
+                if room_id not in rooms:
+                    self.send_json(404, {"error": "Room not found"})
+                    return
+                r = rooms[room_id]
+                serialized = serialize_room(r)
+            content = json.dumps(serialized, indent=2, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="room_{room_id}_rev{r.get("revision", 1)}.json"')
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
+
+        # 9. Room Chat Messages: /api/rooms/<id>/chat
+        if path.startswith("/api/rooms/") and path.endswith("/chat"):
+            if not self.require_guest(token):
+                return
+            parts = path.split("/")
+            room_id = parts[3]
+            with lock:
+                if room_id not in rooms:
+                    self.send_json(404, {"error": "Room not found"})
+                    return
+                r = rooms[room_id]
+                since_id = query_params.get("since", "")
+                chat_list = r.get("chat", [])
+                if since_id:
+                    idx = -1
+                    for i, m in enumerate(chat_list):
+                        if m.get("id") == since_id:
+                            idx = i
+                            break
+                    if idx >= 0:
+                        chat_list = chat_list[idx + 1:]
+                self.send_json(200, {
+                    "messages": chat_list,
+                    "total": len(r.get("chat", []))
+                })
+            return
+
         self.send_json(404, {"error": "Endpoint not found"})
 
     def do_POST(self):
@@ -880,6 +1148,7 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                     "objects": {},
                     "tombstones": {},
                     "presence": {},
+                    "chat": [],
                     "persistent": True,
                     "closed": False,
                     "members": {user_name},
@@ -1030,6 +1299,7 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                         "transforms": data.get("transforms", {}),
                         "teamTest": data.get("teamTest", None),
                         "activeScript": data.get("activeScript", None),
+                        "ping": data.get("ping", None),
                         "hue": stable_hue(token),
                         "time": time.time(),
                     }
@@ -1164,6 +1434,36 @@ class PlaceTogetherHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": err})
             else:
                 self.send_json(200, result)
+            return
+
+        # 10. Room Chat POST: /api/rooms/<id>/chat
+        if path.startswith("/api/rooms/") and path.endswith("/chat"):
+            if not self.require_guest(token):
+                return
+            parts = path.split("/")
+            room_id = parts[3]
+            with lock:
+                if room_id not in rooms:
+                    self.send_json(404, {"error": "Комната не найдена"})
+                    return
+                r = rooms[room_id]
+                raw_text = str(data.get("text", "")).strip()
+                if not raw_text:
+                    self.send_json(400, {"error": "Message text cannot be empty"})
+                    return
+                user_name = guests.get(token, {}).get("name", "User")
+                msg = {
+                    "id": f"{int(time.time()*1000)}_{len(r.get('chat', []))+1}",
+                    "from": user_name,
+                    "text": raw_text[:500],
+                    "time": time.time(),
+                    "hue": stable_hue(token),
+                }
+                r.setdefault("chat", []).append(msg)
+                if len(r["chat"]) > 200:
+                    r["chat"] = r["chat"][-200:]
+                mark_dirty(room_id)
+                self.send_json(200, {"ok": True, "message": msg})
             return
 
         self.send_json(404, {"error": "Endpoint not found"})

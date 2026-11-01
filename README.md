@@ -59,6 +59,15 @@ A high-performance custom plugin and synchronization engine for **Roblox Studio*
 - **Plugin resilience:** the sync loop backs off exponentially (0.15 s → 5 s) while the server is unreachable instead of retrying 6.6 times per second.
 - **`build.py`, tests and CI:** `PlaceTogether.rbxmx` is generated from `plugin_source.luau`, and a stdlib test suite covers sync, auth and persistence.
 
+### 8. Collaboration Suite & High-Performance Upgrades (3.2)
+- **📍 3D Spatial Beacons (Pings - "Look here!"):** Drop a glowing 3D beacon at your cursor or camera target with 1 click. Teammates see a pulsing sphere, vertical light beam, and a billboard showing your name, message, and live distance in studs, accompanied by a subtle audio chime.
+- **💬 In-Studio Developer Team Chat:** A dedicated 4th tab **"Chat"** in the plugin UI allows teammates to communicate in real time in Studio edit mode with timestamps, sender color badges, unread notification dots, and incoming message chimes.
+- **👥 Teammate Views, 1-Click Teleport & Camera Follow:** The **"Active Teammates"** card shows who is in the session, their current task (e.g. `Editing Script: Foo.luau:42`, `Building`, or `In Team Test`), with **"📍 Teleport"** (fly camera directly to peer's location and angle) and **"👁️ Follow"** (smoothly follow teammate's camera view).
+- **⚠️ Selection Conflict Protection:** An instant visual warning banner alerts developers if a part or model they select is already being actively manipulated by another teammate.
+- **🗜️ Transparent Gzip Network Compression:** The server automatically compresses HTTP payloads via `gzip` when requested by Roblox Studio (`Accept-Encoding: gzip`), cutting payload sizes by 70–90% on large maps and over VPNs.
+- **🌐 Live Web Dashboard:** Opening `http://localhost:8787` in any web browser opens a sleek dark-themed live dashboard showing active rooms, revision counters, connected peers, uptime, and 1-click room snapshot downloads (`.json`).
+- **🧰 Standalone Room Exporter & Inspector (`export_room.py`):** Inspect `data.json` or backups headlessly and export any room to standalone JSON without opening Roblox Studio.
+
 ---
 
 ## 📦 Getting Started
@@ -101,6 +110,7 @@ Additional hardening that is now enforced:
 | [`plugin_source.luau`](plugin_source.luau) | **Source of truth** for the Studio plugin |
 | [`PlaceTogether.rbxmx`](PlaceTogether.rbxmx) | Generated Roblox model — do not edit by hand |
 | [`server.py`](server.py) | Sync & persistence server |
+| [`export_room.py`](export_room.py) | Standalone room inspector & snapshot exporter CLI |
 | [`build.py`](build.py) | Rebuilds `PlaceTogether.rbxmx` from the Luau source |
 | [`tests/test_server.py`](tests/test_server.py) | Server regression tests (stdlib only) |
 

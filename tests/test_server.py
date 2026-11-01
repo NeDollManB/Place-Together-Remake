@@ -353,5 +353,91 @@ class TestTombstonePruning(unittest.TestCase):
         self.assertEqual(len(room["tombstones"]), 40)
 
 
+class TestServerFeatures(ServerTestBase):
+    def test_gzip_compression_when_requested(self):
+        # Register guest and create room with some objects so body is > 1024 bytes
+        _, g = http_json(self.base, "/api/guest", {"name": "Gzipper"})
+        token = g["token"]
+        _, r = http_json(self.base, "/api/rooms", {"name": "Gzip Room"}, token=token)
+        room_id = r["id"]
+
+        changes = [
+            {"id": f"part_{i}", "value": {"class": "Part", "name": f"Part_{i}", "props": {"Size": [1, 1, 1]}}}
+            for i in range(40)
+        ]
+        http_json(self.base, f"/api/rooms/{room_id}/sync", {"changes": changes}, token=token)
+
+        # Request sync with Accept-Encoding: gzip
+        req = urllib.request.Request(
+            f"{self.base}/api/rooms/{room_id}/sync",
+            headers={"Authorization": f"Bearer {token}", "Accept-Encoding": "gzip"}
+        )
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertEqual(resp.headers.get("Content-Encoding"), "gzip")
+            raw_gz = resp.read()
+            import gzip
+            decompressed = gzip.decompress(raw_gz)
+            data = json.loads(decompressed.decode("utf-8"))
+            self.assertIn("objects", data)
+            self.assertGreater(len(data["objects"]), 30)
+
+    def test_dashboard_html_when_accept_html(self):
+        req = urllib.request.Request(
+            f"{self.base}/",
+            headers={"Accept": "text/html,application/xhtml+xml"}
+        )
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("text/html", resp.headers.get("Content-Type", ""))
+            html = resp.read().decode("utf-8")
+            self.assertIn("PlaceTogether 3.0", html)
+            self.assertIn("Active Rooms", html)
+
+    def test_room_chat_flow(self):
+        _, g1 = http_json(self.base, "/api/guest", {"name": "Alice"})
+        _, g2 = http_json(self.base, "/api/guest", {"name": "Bob"})
+        _, room = http_json(self.base, "/api/rooms", {"name": "ChatRoom"}, token=g1["token"])
+        r_id = room["id"]
+
+        # Post message from Alice
+        s1, res1 = http_json(self.base, f"/api/rooms/{r_id}/chat", {"text": "Hello Bob!"}, token=g1["token"])
+        self.assertEqual(s1, 200)
+        self.assertEqual(res1["message"]["text"], "Hello Bob!")
+        self.assertEqual(res1["message"]["from"], "Alice")
+
+        # Post message from Bob
+        s2, res2 = http_json(self.base, f"/api/rooms/{r_id}/chat", {"text": "Hey Alice!"}, token=g2["token"])
+        self.assertEqual(s2, 200)
+
+        # Get messages
+        s_get, get_res = http_json(self.base, f"/api/rooms/{r_id}/chat", token=g1["token"])
+        self.assertEqual(s_get, 200)
+        self.assertEqual(len(get_res["messages"]), 2)
+        self.assertEqual(get_res["messages"][0]["text"], "Hello Bob!")
+        self.assertEqual(get_res["messages"][1]["text"], "Hey Alice!")
+
+    def test_room_export(self):
+        _, g = http_json(self.base, "/api/guest", {"name": "Exporter"})
+        _, r = http_json(self.base, "/api/rooms", {"name": "ExportPlace"}, token=g["token"])
+        req = urllib.request.Request(f"{self.base}/api/rooms/{r['id']}/export")
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("attachment", resp.headers.get("Content-Disposition", ""))
+            payload = json.loads(resp.read().decode("utf-8"))
+            self.assertEqual(payload["name"], "ExportPlace")
+
+    def test_merge_3way_text(self):
+        base = "def foo():\n    return 1\n\ndef bar():\n    return 2\n"
+        # Developer A edits foo
+        dev_a = "def foo():\n    return 42\n\ndef bar():\n    return 2\n"
+        # Developer B edits bar
+        dev_b = "def foo():\n    return 1\n\ndef bar():\n    return 100\n"
+
+        merged = server.merge_3way_text(base, dev_a, dev_b)
+        self.assertIn("return 42", merged)
+        self.assertIn("return 100", merged)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

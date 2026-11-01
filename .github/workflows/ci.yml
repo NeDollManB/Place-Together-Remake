@@ -14,8 +14,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Byte-compile server
-        run: python -m py_compile server.py
+      - name: Byte-compile server and tools
+        run: python -m py_compile server.py export_room.py
 
       - name: Verify the plugin build is up to date
         run: python build.py --check

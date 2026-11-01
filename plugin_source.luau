@@ -312,6 +312,7 @@ do
 
 	local tabDefs = {
 		{"home", "Together"},
+		{"chat", "Chat"},
 		{"saves", "Saves & Rooms"},
 		{"settings", "Settings"},
 	}
@@ -354,7 +355,22 @@ local sessionTitle
 local sessionStats
 local participantsText
 local quickSaveBtn
+local dropPingBtn
 local connect
+
+-- Conflict warning banner
+local conflictBanner = Instance.new("Frame")
+conflictBanner.Size = UDim2.new(1, 0, 0, 32)
+conflictBanner.BackgroundColor3 = palette.dangerBg
+conflictBanner.BorderSizePixel = 0
+conflictBanner.Visible = false
+corner(conflictBanner, 6)
+stroke(conflictBanner, palette.dangerBorder, 1)
+local conflictLabel = textLabel("⚠️ Selection conflict detected", 32, conflictBanner)
+conflictLabel.TextColor3 = Color3.fromRGB(254, 202, 202)
+conflictLabel.TextSize = 11
+conflictLabel.Font = Enum.Font.GothamMedium
+conflictBanner.Parent = homePanel
 
 do
 	local sessionBadge = textLabel("LIVE CO-OP SESSION (60 FPS INTERPOLATION)", 14, sessionCard)
@@ -372,8 +388,26 @@ do
 	participantsText.TextSize = 11
 
 	quickSaveBtn = makeButton("Save & Create Backup Now", sessionCard, "success", 34)
+	dropPingBtn = makeButton("📍 Drop 3D Beacon (Look Here!)", sessionCard, "primary", 34)
 	connect = makeButton("Leave Session", sessionCard, "danger", 34)
 	connect.Visible = false
+end
+
+-- ACTIVE TEAMMATES & TELEPORT CARD
+local peersCard = card(homePanel, "PeersCard")
+local peersListContainer
+do
+	local pBadge = textLabel("ACTIVE TEAMMATES", 14, peersCard)
+	pBadge.Font = Enum.Font.GothamBold
+	pBadge.TextSize = 9
+	pBadge.TextColor3 = palette.accent
+
+	title("Teammate Views & Teleport", peersCard)
+	local pDesc = textLabel("Click Teleport to fly to a teammate, or Follow to track their camera:", 18, peersCard)
+	pDesc.TextSize = 11
+	pDesc.TextColor3 = palette.subtle
+
+	peersListContainer = container(peersCard, "PeersList")
 end
 
 -- REAL-TIME SCRIPT COLLABORATION CARD
@@ -457,6 +491,55 @@ local accept = makeButton("Accept Server Version", homePanel)
 accept.Visible = false
 
 -- ============================================================
+-- CHAT PANEL (REAL-TIME IN-STUDIO DEV CHAT)
+-- ============================================================
+local chatPanel = container(body, "ChatPanel")
+currentParent = chatPanel
+
+local chatCard = card(chatPanel, "ChatCard")
+local chatMessagesFrame
+local chatInput
+local chatSendBtn
+
+do
+	local chatBadge = textLabel("DEVELOPER IN-STUDIO CHAT", 14, chatCard)
+	chatBadge.Font = Enum.Font.GothamBold
+	chatBadge.TextSize = 9
+	chatBadge.TextColor3 = palette.accent
+
+	title("Team Edit Mode Chat", chatCard)
+	local chatSub = textLabel("Collaborate and coordinate with teammates live in Roblox Studio:", 18, chatCard)
+	chatSub.TextSize = 11
+	chatSub.TextColor3 = palette.subtle
+
+	chatMessagesFrame = Instance.new("ScrollingFrame")
+	chatMessagesFrame.Size = UDim2.new(1, 0, 0, 260)
+	chatMessagesFrame.BackgroundColor3 = palette.field
+	chatMessagesFrame.BorderSizePixel = 0
+	chatMessagesFrame.ScrollBarThickness = 4
+	chatMessagesFrame.ScrollBarImageColor3 = palette.line
+	chatMessagesFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	chatMessagesFrame.CanvasSize = UDim2.new()
+	corner(chatMessagesFrame, 8)
+	stroke(chatMessagesFrame, palette.cardBorder, 1)
+	pad(chatMessagesFrame, 8, 8)
+	stack(chatMessagesFrame, 6)
+	chatMessagesFrame.Parent = chatCard
+
+	local chatInputRow = Instance.new("Frame")
+	chatInputRow.Size = UDim2.new(1, 0, 0, 36)
+	chatInputRow.BackgroundTransparency = 1
+	chatInputRow.Parent = chatCard
+
+	chatInput = field("Type message to team...", "", chatInputRow)
+	chatInput.Size = UDim2.new(1, -74, 1, 0)
+
+	chatSendBtn = makeButton("Send", chatInputRow, "primary", 36)
+	chatSendBtn.Size = UDim2.new(0, 68, 1, 0)
+	chatSendBtn.Position = UDim2.new(1, -68, 0, 0)
+end
+
+-- ============================================================
 -- SAVES & ROOMS PANEL
 -- ============================================================
 local savesPanel = container(body, "SavesPanel")
@@ -519,7 +602,14 @@ do
 	addressHeader.TextColor3 = palette.subtle
 
 	address = field("http://127.0.0.1:8787", savedAddress)
-	local addressHint = textLabel("All participants must enter the same server address.", 18)
+	local testLocalhostBtn = makeButton("⚡ Connect Localhost (127.0.0.1:8787)", settingsPanel, "primary", 30)
+	testLocalhostBtn.MouseButton1Click:Connect(function()
+		address.Text = "http://127.0.0.1:8787"
+		plugin:SetSetting("PTServerAddress", address.Text)
+		setNotice("Address set to http://127.0.0.1:8787")
+	end)
+
+	local addressHint = textLabel("All participants must enter the same server address (Localhost, LAN, Radmin, Hamachi, or tunnel).", 18)
 	addressHint.TextSize = 11
 	addressHint.TextColor3 = palette.subtle
 
@@ -649,6 +739,7 @@ end
 
 local function refreshUI(isActive, isLoggedIn, hasInbox, isBusy)
 	homePanel.Visible = (uiTab == "home")
+	chatPanel.Visible = (uiTab == "chat")
 	savesPanel.Visible = (uiTab == "saves")
 	settingsPanel.Visible = (uiTab == "settings")
 
@@ -691,7 +782,7 @@ local function refreshUI(isActive, isLoggedIn, hasInbox, isBusy)
 		end
 	end
 
-	for _, b in ipairs({invite, yes, no, connect, retry, accept, logout, hostStartBtn, quickSaveBtn, createSnapBtn}) do
+	for _, b in ipairs({invite, yes, no, connect, retry, accept, logout, hostStartBtn, quickSaveBtn, dropPingBtn, chatSendBtn, createSnapBtn}) do
 		b.Active = not isBusy
 		b.AutoButtonColor = not isBusy
 		b.TextTransparency = isBusy and 0.45 or 0
@@ -2709,11 +2800,272 @@ local function refreshSavesAndBackupsUI()
 	end)
 end
 
+local unreadChatCount = 0
+local lastChatId = ""
+local followingPeerId = nil
+local localActivePing = nil
+
+local function updateChatTabBadge()
+	local b = tabButtons["chat"]
+	if b then
+		if unreadChatCount > 0 then
+			b.Text = "Chat ("..unreadChatCount..")"
+		else
+			b.Text = "Chat"
+		end
+	end
+end
+
+local function playNotificationSound()
+	pcall(function()
+		local s = Instance.new("Sound")
+		s.SoundId = "rbxasset://sounds/electronicpingshort.wav"
+		s.Volume = 0.5
+		s.Parent = game:GetService("SoundService")
+		s:Play()
+		task.delay(2, function() s:Destroy() end)
+	end)
+end
+
+local function appendChatMessage(msg)
+	if not chatMessagesFrame then return end
+	local row = Instance.new("Frame")
+	row.Size = UDim2.new(1, 0, 0, 0)
+	row.AutomaticSize = Enum.AutomaticSize.Y
+	row.BackgroundTransparency = 1
+	row.Parent = chatMessagesFrame
+
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = Enum.FillDirection.Vertical
+	layout.Padding = UDim.new(0, 2)
+	layout.Parent = row
+
+	local topRow = Instance.new("Frame")
+	topRow.Size = UDim2.new(1, 0, 0, 16)
+	topRow.BackgroundTransparency = 1
+	topRow.Parent = row
+
+	local authorLabel = Instance.new("TextLabel")
+	authorLabel.Size = UDim2.new(0, 0, 1, 0)
+	authorLabel.AutomaticSize = Enum.AutomaticSize.X
+	authorLabel.BackgroundTransparency = 1
+	authorLabel.Font = Enum.Font.GothamBold
+	authorLabel.TextSize = 11
+	authorLabel.TextColor3 = Color3.fromHSV(msg.hue or 0.55, 0.65, 1)
+	authorLabel.Text = msg.from or "User"
+	authorLabel.Parent = topRow
+
+	local timeLabel = Instance.new("TextLabel")
+	timeLabel.Size = UDim2.new(0, 0, 1, 0)
+	timeLabel.Position = UDim2.fromOffset(60, 0)
+	timeLabel.AutomaticSize = Enum.AutomaticSize.X
+	timeLabel.BackgroundTransparency = 1
+	timeLabel.Font = Enum.Font.Gotham
+	timeLabel.TextSize = 10
+	timeLabel.TextColor3 = palette.subtle
+	local dt = os.date("*t", math.floor(msg.time or os.time()))
+	timeLabel.Text = string.format(" %02d:%02d", dt.hour, dt.min)
+	timeLabel.Parent = topRow
+
+	local msgLabel = Instance.new("TextLabel")
+	msgLabel.Size = UDim2.new(1, 0, 0, 0)
+	msgLabel.AutomaticSize = Enum.AutomaticSize.Y
+	msgLabel.BackgroundTransparency = 1
+	msgLabel.Font = Enum.Font.Gotham
+	msgLabel.TextSize = 12
+	msgLabel.TextColor3 = palette.text
+	msgLabel.TextWrapped = true
+	msgLabel.TextXAlignment = Enum.TextXAlignment.Left
+	msgLabel.Text = msg.text or ""
+	msgLabel.Parent = row
+
+	task.defer(function()
+		chatMessagesFrame.CanvasPosition = Vector2.new(0, 999999)
+	end)
+
+	if msg.from ~= selfNick.Text and uiTab ~= "chat" then
+		unreadChatCount += 1
+		updateChatTabBadge()
+		playNotificationSound()
+	end
+end
+
+local function sendChatMessage()
+	local raw = chatInput.Text
+	local trimmed = raw:match("^%s*(.-)%s*$")
+	if not trimmed or trimmed == "" then return end
+	if not active or room.Text == "" then
+		setNotice("Connect to a room to send chat messages.")
+		return
+	end
+	chatInput.Text = ""
+	task.spawn(function()
+		local ok, res = pcall(function()
+			return api("/rooms/"..room.Text.."/chat", "POST", {text = trimmed})
+		end)
+		if ok and res and res.message then
+			appendChatMessage(res.message)
+		end
+	end)
+end
+
+chatSendBtn.MouseButton1Click:Connect(sendChatMessage)
+chatInput.FocusLost:Connect(function(enterPressed)
+	if enterPressed then
+		sendChatMessage()
+	end
+end)
+
+local function drop3DBeaconAtCursor()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+	local targetPos = cam.CFrame.Position + (cam.CFrame.LookVector * 25)
+	local rayParam = RaycastParams.new()
+	rayParam.FilterType = Enum.RaycastFilterType.Exclude
+	if TT and TT.char then
+		rayParam.FilterDescendantsInstances = {TT.char}
+	end
+	local hit = workspace:Raycast(cam.CFrame.Position, cam.CFrame.LookVector * 1000, rayParam)
+	if hit then
+		targetPos = hit.Position
+	end
+
+	localActivePing = {
+		id = "p_"..math.floor(os.clock()*1000).."_"..math.random(100, 999),
+		pos = {targetPos.X, targetPos.Y, targetPos.Z},
+		time = os.clock(),
+		text = "Look here!",
+	}
+	playNotificationSound()
+	setNotice("📍 3D Beacon dropped! Visible to teammates.")
+end
+
+dropPingBtn.MouseButton1Click:Connect(drop3DBeaconAtCursor)
+
+local function updateTeammatesUI(peers)
+	if not peersListContainer then return end
+	clearContainerChildren(peersListContainer)
+	if #peers == 0 then
+		local empty = textLabel("No other teammates in session.", 20, peersListContainer)
+		empty.TextColor3 = palette.subtle
+		empty.TextSize = 11
+		return
+	end
+
+	for _, peer in ipairs(peers) do
+		local row = Instance.new("Frame")
+		row.Size = UDim2.new(1, 0, 0, 36)
+		row.BackgroundColor3 = palette.field
+		row.BorderSizePixel = 0
+		corner(row, 6)
+		stroke(row, palette.cardBorder, 1)
+		pad(row, 8, 4)
+		row.Parent = peersListContainer
+
+		local dot = Instance.new("Frame")
+		dot.Size = UDim2.fromOffset(8, 8)
+		dot.Position = UDim2.new(0, 0, 0.5, -4)
+		dot.BackgroundColor3 = Color3.fromHSV(peer.hue or 0.55, 0.65, 1)
+		dot.BorderSizePixel = 0
+		corner(dot, 4)
+		dot.Parent = row
+
+		local nameLabel = Instance.new("TextLabel")
+		nameLabel.Position = UDim2.fromOffset(14, 2)
+		nameLabel.Size = UDim2.new(1, -150, 0, 16)
+		nameLabel.BackgroundTransparency = 1
+		nameLabel.Font = Enum.Font.GothamBold
+		nameLabel.TextSize = 12
+		nameLabel.TextColor3 = palette.text
+		nameLabel.TextXAlignment = Enum.TextXAlignment.Left
+		nameLabel.Text = peer.name or "Teammate"
+		nameLabel.Parent = row
+
+		local subText = "Building"
+		if peer.teamTest and peer.teamTest.active then
+			subText = "🎮 In Team Test"
+		elseif peer.activeScript then
+			subText = "📝 "..(peer.activeScript.name or "Script")..":L"..(peer.activeScript.line or 1)
+		end
+		local actLabel = Instance.new("TextLabel")
+		actLabel.Position = UDim2.fromOffset(14, 18)
+		actLabel.Size = UDim2.new(1, -150, 0, 14)
+		actLabel.BackgroundTransparency = 1
+		actLabel.Font = Enum.Font.Gotham
+		actLabel.TextSize = 10
+		actLabel.TextColor3 = palette.muted
+		actLabel.TextXAlignment = Enum.TextXAlignment.Left
+		actLabel.Text = subText
+		actLabel.Parent = row
+
+		local tpBtn = Instance.new("TextButton")
+		tpBtn.Size = UDim2.fromOffset(60, 26)
+		tpBtn.Position = UDim2.new(1, -126, 0.5, -13)
+		tpBtn.Text = "📍 Teleport"
+		tpBtn.Font = Enum.Font.GothamMedium
+		tpBtn.TextSize = 10
+		tpBtn.TextColor3 = palette.text
+		tpBtn.BackgroundColor3 = palette.tabBg
+		tpBtn.BorderSizePixel = 0
+		corner(tpBtn, 4)
+		stroke(tpBtn, palette.line, 1)
+		tpBtn.Parent = row
+
+		tpBtn.MouseButton1Click:Connect(function()
+			local cam = workspace.CurrentCamera
+			if cam and peer.position then
+				followingPeerId = nil
+				local p = Vector3.new(peer.position[1], peer.position[2], peer.position[3])
+				local lv = Vector3.new(peer.look[1], peer.look[2], peer.look[3])
+				if lv.Magnitude > 0.01 then
+					cam.CFrame = CFrame.lookAt(p, p + lv)
+				else
+					cam.CFrame = CFrame.new(p)
+				end
+				setNotice("Teleported to "..peer.name)
+			end
+		end)
+
+		local isFollowing = (followingPeerId == peer.id)
+		local followBtn = Instance.new("TextButton")
+		followBtn.Size = UDim2.fromOffset(56, 26)
+		followBtn.Position = UDim2.new(1, -60, 0.5, -13)
+		followBtn.Text = isFollowing and "Unfollow" or "👁️ Follow"
+		followBtn.Font = Enum.Font.GothamMedium
+		followBtn.TextSize = 10
+		followBtn.TextColor3 = isFollowing and palette.ink or palette.text
+		followBtn.BackgroundColor3 = isFollowing and palette.accent or palette.tabBg
+		followBtn.BorderSizePixel = 0
+		corner(followBtn, 4)
+		stroke(followBtn, palette.line, 1)
+		followBtn.Parent = row
+
+		followBtn.MouseButton1Click:Connect(function()
+			if followingPeerId == peer.id then
+				followingPeerId = nil
+				followBtn.Text = "👁️ Follow"
+				followBtn.BackgroundColor3 = palette.tabBg
+				followBtn.TextColor3 = palette.text
+				setNotice("Stopped following "..peer.name)
+			else
+				followingPeerId = peer.id
+				followBtn.Text = "Unfollow"
+				followBtn.BackgroundColor3 = palette.accent
+				followBtn.TextColor3 = palette.ink
+				setNotice("Following "..peer.name.."'s camera")
+			end
+		end)
+	end
+end
+
 for key, b in pairs(tabButtons) do
 	b.MouseButton1Click:Connect(function()
 		uiTab = key
 		if key == "saves" then
 			refreshSavesAndBackupsUI()
+		elseif key == "chat" then
+			unreadChatCount = 0
+			updateChatTabBadge()
 		end
 	end)
 end
@@ -2726,6 +3078,24 @@ createSnapBtn.MouseButton1Click:Connect(function()
 end)
 
 refreshSavesBtn.MouseButton1Click:Connect(refreshSavesAndBackupsUI)
+
+-- Chat background polling loop
+task.spawn(function()
+	while true do
+		if active and loggedIn and not Run:IsRunning() and room.Text ~= "" then
+			pcall(function()
+				local res = api("/rooms/"..room.Text.."/chat"..(lastChatId ~= "" and ("?since="..lastChatId) or ""), "GET")
+				if res and res.messages then
+					for _, msg in ipairs(res.messages) do
+						lastChatId = msg.id
+						appendChatMessage(msg)
+					end
+				end
+			end)
+		end
+		task.wait(0.6)
+	end
+end)
 
 -- ============================================================
 -- BACKGROUND LOOPS (INVITATIONS & FAST 6.6Hz DELTA SYNC)
@@ -3654,6 +4024,7 @@ do
 			folder = nil
 		end
 		markers = {}
+		followingPeerId = nil
 	end
 
 	local function vector(v)
@@ -3772,6 +4143,46 @@ do
 		end
 		participantsText.Text = #names > 0 and ("Peers online ("..#names.."): "..table.concat(names, ", ")) or "No other participants in room yet."
 
+		-- Call updateTeammatesUI
+		pcall(function() updateTeammatesUI(peers) end)
+
+		-- Check selection conflicts and 3D Pings from peers
+		local mySelectedKeys = {}
+		for _, obj in ipairs(Selection:Get()) do
+			local k = ids[obj]
+			if k then mySelectedKeys[k] = obj end
+		end
+		local conflictObjName = nil
+		local conflictPeerName = nil
+		for _, peer in ipairs(peers) do
+			if peer.selected then
+				for _, k in ipairs(peer.selected) do
+					if mySelectedKeys[k] then
+						conflictObjName = mySelectedKeys[k].Name
+						conflictPeerName = peer.name
+						break
+					end
+				end
+			end
+			if peer.ping and (os.clock() - peer.ping.time < 8) then
+				local item = markers[peer.id]
+				if item then
+					item.ping = peer.ping
+					if item.lastPingId ~= peer.ping.id then
+						item.lastPingId = peer.ping.id
+						playNotificationSound()
+					end
+				end
+			end
+			if conflictObjName then break end
+		end
+		if conflictObjName then
+			conflictBanner.Visible = true
+			conflictLabel.Text = "⚠️ Conflict: '"..conflictObjName.."' is also selected by "..conflictPeerName
+		else
+			conflictBanner.Visible = false
+		end
+
 		-- Update Active Team Testers
 		local testers = {}
 		for _, peer in ipairs(peers) do
@@ -3878,6 +4289,13 @@ do
 			teamTestData = { active = false }
 		end
 
+		local pingPayload = nil
+		if localActivePing and (os.clock() - localActivePing.time < 8) then
+			pingPayload = localActivePing
+		else
+			localActivePing = nil
+		end
+
 		return {
 			position = {position.X, position.Y, position.Z},
 			look = {look.X, look.Y, look.Z},
@@ -3885,6 +4303,7 @@ do
 			transforms = transforms,
 			teamTest = teamTestData,
 			activeScript = currentActiveScriptInfo,
+			ping = pingPayload,
 		}
 	end
 
@@ -3982,6 +4401,99 @@ do
 						item.boxes[key] = nil
 					end
 				end
+			end
+		end
+
+		-- Follow camera mode if active
+		if followingPeerId and markers[followingPeerId] then
+			local fItem = markers[followingPeerId]
+			local cam = workspace.CurrentCamera
+			if cam and fItem.position then
+				local targetCF = CFrame.lookAt(fItem.position, fItem.position + fItem.look)
+				cam.CFrame = cam.CFrame:Lerp(targetCF, 0.2)
+			end
+		end
+
+		-- 3. 3D Spatial Beacons (Pings)
+		local myCamPos = workspace.CurrentCamera and workspace.CurrentCamera.CFrame.Position or Vector3.zero
+		for id, item in pairs(markers) do
+			if item.ping and (os.clock() - item.ping.time < 8) then
+				if not item.beacon then
+					local bGroup = Instance.new("Folder")
+					bGroup.Name = "PingBeacon"
+					bGroup.Parent = item.group
+
+					local bSphere = Instance.new("SphereHandleAdornment")
+					bSphere.Adornee = workspace.Terrain
+					bSphere.Color3 = item.tint
+					bSphere.Transparency = 0.2
+					bSphere.AlwaysOnTop = true
+					bSphere.Parent = bGroup
+
+					local bBeam = Instance.new("LineHandleAdornment")
+					bBeam.Adornee = workspace.Terrain
+					bBeam.Color3 = item.tint
+					bBeam.Thickness = 4
+					bBeam.AlwaysOnTop = true
+					bBeam.Parent = bGroup
+
+					local bGui = Instance.new("BillboardGui")
+					bGui.Adornee = workspace.Terrain
+					bGui.Size = UDim2.fromOffset(190, 42)
+					bGui.AlwaysOnTop = true
+					bGui.Parent = bGroup
+
+					local bBg = Instance.new("Frame")
+					bBg.Size = UDim2.fromScale(1, 1)
+					bBg.BackgroundColor3 = Color3.fromRGB(15, 18, 26)
+					bBg.BorderSizePixel = 0
+					corner(bBg, 6)
+					stroke(bBg, item.tint, 1.5)
+					bBg.Parent = bGui
+
+					local bName = Instance.new("TextLabel")
+					bName.Size = UDim2.new(1, -8, 0, 18)
+					bName.Position = UDim2.fromOffset(4, 2)
+					bName.BackgroundTransparency = 1
+					bName.Font = Enum.Font.GothamBold
+					bName.TextSize = 12
+					bName.TextColor3 = item.tint
+					bName.Text = "📍 "..(item.ping.text or "Look here!").." ("..item.label.Text..")"
+					bName.Parent = bBg
+
+					local bDist = Instance.new("TextLabel")
+					bDist.Size = UDim2.new(1, -8, 0, 16)
+					bDist.Position = UDim2.fromOffset(4, 20)
+					bDist.BackgroundTransparency = 1
+					bDist.Font = Enum.Font.Gotham
+					bDist.TextSize = 10
+					bDist.TextColor3 = palette.subtle
+					bDist.Text = "calculating..."
+					bDist.Parent = bBg
+
+					item.beacon = {
+						group = bGroup,
+						sphere = bSphere,
+						beam = bBeam,
+						gui = bGui,
+						distLabel = bDist,
+						pos = Vector3.new(item.ping.pos[1], item.ping.pos[2], item.ping.pos[3]),
+					}
+				end
+
+				local b = item.beacon
+				local pulse = 1.8 + math.sin(os.clock() * 8) * 0.5
+				b.sphere.Radius = pulse
+				b.sphere.CFrame = workspace.Terrain.CFrame:ToObjectSpace(CFrame.new(b.pos))
+				b.beam.CFrame = workspace.Terrain.CFrame:ToObjectSpace(CFrame.lookAt(b.pos, b.pos + Vector3.new(0, 1, 0)))
+				b.beam.Length = 30
+				b.gui.StudsOffsetWorldSpace = b.pos - workspace.Terrain.Position + Vector3.new(0, 3.5, 0)
+				local d = math.floor((myCamPos - b.pos).Magnitude)
+				b.distLabel.Text = tostring(d).." studs away"
+			elseif item.beacon then
+				item.beacon.group:Destroy()
+				item.beacon = nil
+				item.ping = nil
 			end
 		end
 	end)
